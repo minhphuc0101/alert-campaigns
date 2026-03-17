@@ -146,12 +146,6 @@ def analyze_data(df, date_col):
                         'metrics': f"Spent: {total_spent:,.0f}",
                         'reason': "Impression target not met (>5% gap)"
                     })
-                        'campaign': campaign,
-                        'status': status,
-                        'issue': f"Target {kpi_target:,.0f} Impressions, actual {total_impressions:,.0f}",
-                        'metrics': f"Spent: {total_spent:,.0f}",
-                        'reason': "Impression target not met"
-                    })
 
         # 2. Spend Anomaly (Yesterday vs Avg 3 Days)
         yesterday_data = campaign_df[campaign_df[date_col] == latest_date]
