@@ -1,5 +1,6 @@
 import os
 import smtplib
+import re
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import datetime
@@ -7,15 +8,12 @@ from datetime import timedelta
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
-from google import genai
-from google.genai import types
 from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
 
 # Configuration
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 SENDER_EMAIL = os.getenv("EMAIL_SENDER_ADDRESS")
 SENDER_PASSWORD = os.getenv("EMAIL_SENDER_PASSWORD")
 RECIPIENT_EMAIL = "phuc.tran@digimind.asia"
@@ -60,8 +58,10 @@ def fetch_recent_data(client):
         print("The sheet is empty.")
         return None
 
+    # Standardize column names
     df.columns = [str(c).strip().lower() for c in df.columns]
 
+    # Find the date column
     date_keywords = ['date', 'day']
     date_col = next((col for col in df.columns if any(kw in col for kw in date_keywords)), None)
             
@@ -69,74 +69,185 @@ def fetch_recent_data(client):
         print(f"Error: Could not find a date column. Headers: {df.columns.tolist()}")
         return None
 
+    # Convert to datetime
     df[date_col] = pd.to_datetime(df[date_col], format='mixed', dayfirst=False)
+
+    # Filter for the last 7 days
     cutoff_date = pd.Timestamp.now().normalize() - timedelta(days=LOOKBACK_DAYS)
     recent_df = df[df[date_col] >= cutoff_date]
     recent_df = recent_df.sort_values(by=date_col, ascending=False)
     
-    return recent_df
+    return recent_df, date_col
 
 
-def analyze_with_gemini(data_str):
-    """Sends the data to Gemini for analysis with strict marketer logic."""
-    if not GEMINI_API_KEY:
-        print("Error: GEMINI_API_KEY not set.")
-        return None
-
-    client = genai.Client(api_key=GEMINI_API_KEY)
+def extract_kpi_target(campaign_name):
+    """Extracts numerical target from name (e.g. '3000 CPE' -> 3000, 'CPM_100' -> 100)."""
+    # Look for patterns like '3000 CPE', 'CPM_100', '700 CPM'...
+    cpe_match = re.search(r'(\d+[,\d]*)\s*CPE|CPE[_\s]*(\d+[,\d]*)', campaign_name, re.I)
+    cpm_match = re.search(r'(\d+[,\d]*)\s*CPM|CPM[_\s]*(\d+[,\d]*)', campaign_name, re.I)
     
-    prompt = f"""
-You are an expert digital marketing analyst. 
-Review the following Facebook ad spend data for the past {LOOKBACK_DAYS} days.
-The data includes: Date, Campaign name, Campaign Status, Amount spent, Campaign Spend Cap, Post Engagement, Reach, Impressions, and 3-Second Video Views.
+    def parse_num(val):
+        if not val: return None
+        return int(val.replace(',', ''))
 
-CRITICAL INSTRUCTIONS:
-1. EXCLUSIONS: COMPLETELY IGNORE any campaigns for "App Installs" or "Leads" / "Lead Generation".
-2. KPI EXTRACTION: Only check KPI targets (CPE or CPM) if the Campaign Name contains an explicit number (e.g. "3000 CPE", "CPM_100").
-3. LOGIC A (KPIs):
-   - CPE Check: If (Sum of Spent / Sum of Engagement) > (Target in name * 1.05), alert.
-   - CPM Check: If (Sum of Impressions) < (Target Volume * 0.95), alert. (Note: "CPM_100" = 100,000 Impressions).
-   - UNDEFINED CASE: If Spent > 0 but Engagement or Impressions is 0, alert as "Actual [KPI] is undefined (no results for [Amount] spent)".
-4. LOGIC B (SPEND CAP): Alert if the total sum of spent across 7 days > the "campaign spend cap" value.
-5. LOGIC C (ANOMALIES): Alert if "Yesterday" (latest date in data) spend is >30% higher than the average spend of the 3 days immediately preceding it.
+    if cpe_match:
+        val = parse_num(cpe_match.group(1) or cpe_match.group(2))
+        return 'CPE', val
+    if cpm_match:
+        val = parse_num(cpm_match.group(1) or cpm_match.group(2))
+        # CPM is volume: X * 1000 impressions
+        return 'CPM', val * 1000
+        
+    return None, None
 
-CRITICAL OUTPUT FORMAT:
-You MUST format each flagged campaign exactly like this:
 
-[No]. [Campaign Name]
-   - 📉 Issue: [Specifically explain if it's a KPI miss, Spend Cap miss, or Anomaly]
-   - 💰 Spent: [Total Spent] (Cap: [Target Spend Cap or N/A])
-   - 📊 Metrics: Reach: [Value], Impressions: [Value], Post Engagement: [Value], Video Views: [Value]
-   - campaign status: [active or paused]
-
----
-If nothing requires attention, only output: "Spending is within normal parameters."
-
-Here is the data:
-{data_str}
-"""
+def analyze_data(df, date_col):
+    """Performs mathematical analysis for alerts."""
+    alerts = []
     
-    try:
-        response = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=prompt,
-        )
-        return response.text
-    except Exception as e:
-        print(f"Error calling Gemini: {e}")
-        return None
+    # Exclude App Installs and Leads
+    df = df[~df['campaign name'].str.contains('app install|lead', case=False, na=False)]
+    
+    campaigns = df['campaign name'].unique()
+    available_dates = sorted(df[date_col].unique(), reverse=True)
+    if not available_dates:
+        return []
+        
+    latest_date = available_dates[0]
+    prior_3_dates = available_dates[1:4]
+    
+    for campaign in campaigns:
+        campaign_df = df[df['campaign name'] == campaign]
+        latest_row = campaign_df.iloc[0]
+        status = latest_row.get('campaign status', 'unknown')
+        
+        total_spent = campaign_df['amount spent'].sum()
+        total_engagement = campaign_df['post engagement'].sum()
+        total_impressions = campaign_df['impressions'].sum()
+        total_reach = campaign_df['reach'].sum()
+        total_video_views = campaign_df.get('3-second video views', pd.Series([0])).sum()
+        
+        # 1. KPI Check
+        kpi_type, kpi_target = extract_kpi_target(campaign)
+        if kpi_type and kpi_target:
+            if kpi_type == 'CPE':
+                if total_spent > 0 and total_engagement == 0:
+                    alerts.append({
+                        'campaign': campaign,
+                        'status': status,
+                        'issue': f"Actual CPE is undefined (no engagements for {total_spent:,.0f} spent).",
+                        'spent_line': f"{total_spent:,.0f} (Cap: N/A)",
+                        'metrics': f"Engagement: 0, Reach: {total_reach:,.0f}, Impressions: {total_impressions:,.0f}, Video Views: {total_video_views:,.0f}",
+                        'reason': "Undefined KPI performance"
+                    })
+                else:
+                    actual_cpe = total_spent / total_engagement if total_engagement > 0 else 0
+                    if actual_cpe > (kpi_target * 1.05):
+                        alerts.append({
+                            'campaign': campaign,
+                            'status': status,
+                            'issue': f"Target was {kpi_target:,} CPE, currently at {actual_cpe:,.0f} CPE",
+                            'spent_line': f"{total_spent:,.0f} (Cap: N/A)",
+                            'metrics': f"Reach: {total_reach:,.0f}, Impressions: {total_impressions:,.0f}, Post Engagement: {total_engagement:,.0f}",
+                            'reason': "Target KPI exceeded (>5%)"
+                        })
+            elif kpi_type == 'CPM':
+                if total_spent > 0 and total_impressions == 0:
+                     alerts.append({
+                        'campaign': campaign,
+                        'status': status,
+                        'issue': f"Actual CPM is undefined (no impressions for {total_spent:,.0f} spent).",
+                        'spent_line': f"{total_spent:,.0f} (Cap: N/A)",
+                        'metrics': f"Reach: {total_reach:,.0f}, Impressions: 0, Video Views: {total_video_views:,.0f}",
+                        'reason': "Undefined KPI performance"
+                    })
+                elif total_impressions < (kpi_target * 0.95):
+                    alerts.append({
+                        'campaign': campaign,
+                        'status': status,
+                        'issue': f"Target was {kpi_target:,.0f} Impressions, actual {total_impressions:,.0f}",
+                        'spent_line': f"{total_spent:,.0f} (Cap: N/A)",
+                        'metrics': f"Reach: {total_reach:,.0f}, Impressions: {total_impressions:,.0f}",
+                        'reason': "Impression target not met (>5% gap)"
+                    })
+
+        # 2. Spend Cap Check
+        spend_cap = latest_row.get('campaign spend cap', 0)
+        try:
+            if isinstance(spend_cap, str):
+                spend_cap = float(spend_cap.replace(',', ''))
+            else:
+                spend_cap = float(spend_cap)
+        except (ValueError, TypeError):
+            spend_cap = 0
+
+        if spend_cap > 0 and total_spent > spend_cap:
+             alerts.append({
+                'campaign': campaign,
+                'status': status,
+                'issue': f"Spending exceeds cap. Spent: {total_spent:,.0f} (Cap: {spend_cap:,.0f})",
+                'spent_line': f"{total_spent:,.0f} (Cap: {spend_cap:,.0f})",
+                'metrics': f"Reach: {total_reach:,.0f}, Impressions: {total_impressions:,.0f}, Post Engagement: {total_engagement:,.0f}",
+                'reason': "Spending exceeds cap"
+            })
+
+        # 3. Spend Anomaly (Yesterday vs Avg 3 Days)
+        yesterday_data = campaign_df[campaign_df[date_col] == latest_date]
+        prior_data = campaign_df[campaign_df[date_col].isin(prior_3_dates)]
+        
+        if not yesterday_data.empty and not prior_data.empty:
+            yesterday_spend = yesterday_data['amount spent'].sum()
+            avg_prior_spend = prior_data['amount spent'].sum() / len(prior_3_dates)
+            
+            if avg_prior_spend > 0:
+                percent_increase = (yesterday_spend - avg_prior_spend) / avg_prior_spend
+                if percent_increase > 0.30: # 30% jump
+                    alerts.append({
+                        'campaign': campaign,
+                        'status': status,
+                        'issue': f"Yesterday spend ({yesterday_spend:,.0f}) is {percent_increase*100:.1f}% higher than 3-day avg ({avg_prior_spend:,.0f})",
+                        'spent_line': f"Yesterday: {yesterday_spend:,.0f} (Avg: {avg_prior_spend:,.0f})",
+                        'metrics': f"Date: {latest_date.strftime('%Y-%m-%d')}",
+                        'reason': "High spend anomaly"
+                    })
+
+    # Remove duplicates if a campaign triggered multiple alerts
+    unique_alerts = []
+    seen = set()
+    for a in alerts:
+        key = f"{a['campaign']}_{a['reason']}"
+        if key not in seen:
+            unique_alerts.append(a)
+            seen.add(key)
+    return unique_alerts
 
 
-def send_email_alert(subject, body):
+def format_email(alerts):
+    if not alerts:
+        return None, "Spending is within normal parameters and no action is required today."
+        
+    subject = f"🚨 Action Required: Campaign Alert - {datetime.datetime.now().strftime('%Y-%m-%d')}"
+    body = "Hi Team,\n\nThe following campaigns are currently exceeding their target KPIs or spending anomalies have been detected:\n\n"
+    
+    for i, alert in enumerate(alerts, 1):
+        body += f"{i}. {alert['campaign']}\n"
+        body += f"   - 📉 Issue: {alert['issue']}\n"
+        body += f"   - 💰 Spent: {alert['spent_line']}\n"
+        body += f"   - 📊 Metrics: {alert['metrics']}\n"
+        body += f" - campaign status: {alert['status'].lower()}\n\n"
+        
+    body += "---\nPlease review your Ads Manager.\n- Alert System"
+    return subject, body
+
+
+def send_email(subject, body):
     if not SENDER_EMAIL or not SENDER_PASSWORD:
         return print("Error: Email credentials missing.")
-
     msg = MIMEMultipart()
     msg['From'] = SENDER_EMAIL
     msg['To'] = RECIPIENT_EMAIL
     msg['Subject'] = subject
     msg.attach(MIMEText(body, 'plain'))
-
     try:
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls()
@@ -149,26 +260,20 @@ def send_email_alert(subject, body):
 
 
 def main():
-    print(f"Starting Campaign Alert Script (v3.0 - AI + Strict Logic) at {datetime.datetime.now()}")
+    print(f"Starting Campaign Alert Script (v4.0 - Python Only) at {datetime.datetime.now()}")
     client = get_sheets_client()
-    recent_df = fetch_recent_data(client)
+    result = fetch_recent_data(client)
+    if result is None: return
     
-    if recent_df is None or recent_df.empty:
-        print("No recent data found. Exiting.")
-        return
-        
-    print(f"Found {len(recent_df)} records. Analyzing...")
-    data_csv = recent_df.to_csv(index=False)
-    analysis_text = analyze_with_gemini(data_csv)
+    df, date_col = result
+    alerts = analyze_data(df, date_col)
     
-    if not analysis_text or "within normal parameters" in analysis_text.lower():
-        print("Everything looks normal. No alert sent.")
-        return
-
-    print("Alerts found! Sending summary...")
-    subject = f"🚨 Action Required: Campaign Spend Alert - {datetime.datetime.now().strftime('%Y-%m-%d')}"
-    send_email_alert(subject, analysis_text)
-    print("Done!")
+    subject, body = format_email(alerts)
+    if subject:
+        print(f"Found {len(alerts)} alerts. Sending email...")
+        send_email(subject, body)
+    else:
+        print(body)
 
 if __name__ == "__main__":
     main()
