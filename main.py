@@ -126,18 +126,26 @@ def analyze_data(df, date_col):
             
             if kpi_type == 'CPE':
                 actual_cpe = total_spent / total_engagement if total_engagement > 0 else 0
-                if actual_cpe > kpi_target:
+                # Alert only if Actual > Target + 5%
+                if actual_cpe > (kpi_target * 1.05):
                     alerts.append({
                         'campaign': campaign,
                         'status': status,
                         'issue': f"Target {kpi_target} CPE, actual {actual_cpe:,.0f} CPE",
                         'metrics': f"Spent: {total_spent:,.0f}, Engagement: {total_engagement:,.0f}",
-                        'reason': "Target KPI exceeded"
+                        'reason': "Target KPI exceeded (>5%)"
                     })
             elif kpi_type == 'CPM':
                 # Volume target: Impressions reached
-                if total_impressions < kpi_target:
+                # Alert only if Actual < Target - 5%
+                if total_impressions < (kpi_target * 0.95):
                     alerts.append({
+                        'campaign': campaign,
+                        'status': status,
+                        'issue': f"Target {kpi_target:,.0f} Impressions, actual {total_impressions:,.0f}",
+                        'metrics': f"Spent: {total_spent:,.0f}",
+                        'reason': "Impression target not met (>5% gap)"
+                    })
                         'campaign': campaign,
                         'status': status,
                         'issue': f"Target {kpi_target:,.0f} Impressions, actual {total_impressions:,.0f}",
