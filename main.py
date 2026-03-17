@@ -75,7 +75,7 @@ def fetch_recent_data(client):
     # Find the date column
     date_col = None
     for col in df.columns:
-        if 'date' in col:
+        if 'date' in col or 'day' in col:
             date_col = col
             break
             
