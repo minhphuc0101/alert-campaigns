@@ -126,14 +126,15 @@ Review the following Facebook ad spend and performance data for the past {LOOKBA
 The data includes: Date, Campaign name, Amount spent, Campaign Spend Cap, Post Engagement, Reach, Impressions, and 3-Second Video Views.
 
 CRITICAL INSTRUCTIONS:
-1. Identify any campaigns that have unusually high spending or are pacing to overspend against their "Campaign Spend Cap".
-2. EXTRACT KPIs FROM CAMPAIGN NAMES: Many campaign names contain their target KPI (e.g., "3000 CPE" means Cost Per Engagement should be <= 3000, "700 CPM" means Cost Per 1000 Impressions should be <= 700).
-3. CALCULATE ACTUAL KPIs:
-   - Actual CPE = Amount Spent / Post Engagement   (If Post Engagement > 0)
-   - Actual CPM = (Amount Spent / Impressions) * 1000   (If Impressions > 0)
-   - Actual CPV = Amount Spent / 3-Second Video Views   (If Video Views > 0)
-4. COMPARE: If a campaign name has a target KPI, compare the Actual KPI you calculated against the Target KPI.
-5. ALERT ME IF THE ACTUAL KPI EXCEEDS THE TARGET KPI (meaning performance is worse than goal), or if spending looks highly inefficient or anomalous.
+1. AGGREGATE DATA: First, for each unique Campaign Name, sum up all "Amount spent", "Post Engagement", "Reach", "Impressions", and "3-Second Video Views" across all dates in the provided data.
+2. EXTRACT KPIs FROM CAMPAIGN NAMES:
+   - "X CPM" or "CPM_X" (e.g., "CPM_100"): This is a VOLUME target. The target is X * 1000 total Impressions. Example: "CPM_100" means a goal of 100,000 total impressions.
+   - "X CPE" or "CPE_X" (e.g., "3000 CPE"): This is a RATE target. The Cost Per Engagement should be <= X.
+3. IDENTIFY ISSUES:
+   - For CPM (Volume) targets: Check if the aggregated total Impressions are significantly matching or over/under the target relative to the spend time.
+   - For CPE (Rate) targets: Calculate (Total Spent / Total Post Engagement) and compare it against the target.
+   - Generally check for high spend anomalies or pacing issues against "Campaign Spend Cap".
+4. ANALYZE RESULTS: Determine a short "Reason" for each alert (e.g., "Over achieved", "High spend spike", "Target KPI exceeded", "Pacing warning").
 
 CRITICAL OUTPUT FORMAT:
 You MUST format your response exactly like this template:
@@ -145,9 +146,10 @@ Hi Team,
 The following campaigns are currently exceeding their target KPIs or spending anomalies have been detected over the past {LOOKBACK_DAYS} days:
 
 1. [Campaign Name]
-   - 📉 Issue: [e.g., Target was 700 CPM, currently at 950 CPM]
-   - 💰 Spent: [Amount Spent] (Cap: [Spend Cap if applicable])
-   - 📊 Metrics: [Relevant metrics like Reach, Engagement, etc.]
+   - 📉 Issue: [e.g., Target was 100,000 Impressions, currently at 80,000; or Target was 700 CPE, currently at 950 CPE]
+   - 💰 Spent: [Total Amount Spent] (Cap: [Spend Cap if applicable])
+   - 📊 Metrics: [Relevant metrics like Total Impressions, Reach, etc.]
+   - 🏷️ Reason: [Short reason like "Target KPI exceeded", "Over achieved", etc.]
 
 [Repeat for each flagged campaign]
 
