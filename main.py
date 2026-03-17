@@ -166,6 +166,29 @@ def analyze_data(df, date_col):
                         'reason': "High spend anomaly"
                     })
 
+        # 3. Spend Cap Check (Latest Total vs Cap)
+        # Note: We use the latest entry's spend cap value
+        spend_cap = campaign_df.iloc[0].get('campaign spend cap', 0)
+        # Handle cases where cap might be a string or comma-separated in the sheet
+        try:
+            if isinstance(spend_cap, str):
+                spend_cap = float(spend_cap.replace(',', ''))
+            else:
+                spend_cap = float(spend_cap)
+        except (ValueError, TypeError):
+            spend_cap = 0
+
+        if spend_cap > 0:
+            total_spent = campaign_df['amount spent'].sum()
+            if total_spent > spend_cap:
+                alerts.append({
+                    'campaign': campaign,
+                    'status': status,
+                    'issue': f"Spending exceeds cap. Spent: {total_spent:,.0f} (Cap: {spend_cap:,.0f})",
+                    'metrics': f"Reach: {campaign_df['reach'].sum():,.0f}, Impressions: {campaign_df['impressions'].sum():,.0f}, Post Engagement: {campaign_df['post engagement'].sum():,.0f}",
+                    'reason': "Spending exceeds cap"
+                })
+
     return alerts
 
 
@@ -178,10 +201,11 @@ def format_email(alerts):
     body = "Hi Team,\n\nThe following campaigns are currently exceeding their target KPIs or spending anomalies have been detected:\n\n"
     
     for i, alert in enumerate(alerts, 1):
-        body += f"{i}. {alert['campaign']} ({alert['status']})\n"
+        body += f"{i}. {alert['campaign']}\n"
         body += f"   - 📉 Issue: {alert['issue']}\n"
         body += f"   - 💰 Spent: {alert['metrics']}\n"
-        body += f"   - 🏷️ Reason: {alert['reason']}\n\n"
+        body += f"   - 🏷️ Reason: {alert['reason']}\n"
+        body += f"   - campaign status: {alert['status'].lower()}\n\n"
         
     body += "---\nPlease review your Ads Manager.\n- Alert System"
     
