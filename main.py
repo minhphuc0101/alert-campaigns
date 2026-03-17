@@ -74,14 +74,22 @@ def fetch_recent_data(client):
 
     # Find the date column
     date_col = None
+    # Common variations of "date"
+    date_keywords = ['date', 'day', 'time', 'period']
+    
+    print(f"DEBUG: Processing headers: {df.columns.tolist()}")
+    
     for col in df.columns:
-        if 'date' in col or 'day' in col:
+        col_clean = str(col).strip().lower()
+        if any(keyword in col_clean for keyword in date_keywords):
             date_col = col
+            print(f"DEBUG: Selected '{date_col}' as the date column.")
             break
             
     if not date_col:
-        print("Error: Could not find a 'Date' column in the sheet headers.")
+        print("Error: Could not determine which column contains the Date.")
         print(f"Found columns: {df.columns.tolist()}")
+        print(f"Searched for keywords: {date_keywords}")
         return None
 
     # Convert date column to datetime objects
@@ -194,7 +202,7 @@ def send_email_alert(subject, body):
 
 
 def main():
-    print(f"Starting Campaign Alert Script at {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"Starting Campaign Alert Script (v1.2 - Robust Logic) at {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     
     print("1. Authenticating with Google Sheets...")
     client = get_sheets_client()
