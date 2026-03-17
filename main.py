@@ -125,21 +125,21 @@ You are an expert digital marketing analyst.
 Review the following Facebook ad spend and performance data for the past {LOOKBACK_DAYS} days.
 The data includes: Date, Campaign name, Campaign Status, Amount spent, Campaign Spend Cap, Post Engagement, Reach, Impressions, and 3-Second Video Views.
 
-1. EXCLUSION: COMPLETELY IGNORE any campaigns that are for "App Installs". Do not analyze or report on them.
-2. AGGREGATE DATA: For each unique Campaign Name, sum up all "Amount spent", "Post Engagement", "Reach", "Impressions", and "3-Second Video Views" across the provided data.
-3. EXTRACT KPIs FROM CAMPAIGN NAMES:
+1. EXCLUSION: COMPLETELY IGNORE any campaigns for "App Installs" or "Leads" / "Lead Generation". Do not analyze or report on them.
+2. NUMERICAL KPI ONLY: Only analyze campaigns that have an EXPLICIT NUMBER associated with a KPI in their name (e.g., "3000 CPE" or "CPM_100"). If a campaign just says "CPE" or "CPM" without a target number, IGNORE IT for KPI analysis.
+3. AGGREGATE DATA: For each unique Campaign Name, sum up all "Amount spent", "Post Engagement", "Reach", "Impressions", and "3-Second Video Views" across the provided data.
+4. EXTRACT KPIs FROM CAMPAIGN NAMES:
    - "X CPM" or "CPM_X" (e.g., "CPM_100"): Volume target = X * 1000 total Impressions.
    - "X CPE" or "CPE_X" (e.g., "3000 CPE"): Rate target = Cost Per Engagement <= X.
-4. UNIT COST SPIKE DETECTION:
+5. UNIT COST SPIKE DETECTION: Only perform this for campaigns that survived the previous filters.
    - Identify the "current" unit cost (latest day with spend).
-   - Calculate the "average unit cost" for that same campaign over the 3 days prior to the latest day.
-   - ALERT if the current unit cost is >30% higher than the 3-day average unit cost for that campaign.
-   - Use (Spent / Impressions * 1000) for CPM campaigns and (Spent / Engagement) for CPE campaigns.
-5. IDENTIFY ISSUES:
+   - Calculate the "average unit cost" over the 3 days prior.
+   - ALERT if current unit cost >30% higher than 3-day average.
+6. IDENTIFY ISSUES:
    - Rate targets: Total Spent / Total Post Engagement > Target.
    - Volume targets: Total Impressions match/under target relative to spend.
-   - Status check: Note the "Campaign Status" (Active, Paused, etc.).
-6. ANALYZE RESULTS: Determine a short "Reason" (e.g., "Unit cost spike >30%", "Over achieved", "KPI target missed", "Status: Paused but high spend").
+   - STATUS: You MUST include the "Campaign Status" in the alert header.
+7. ANALYZE RESULTS: Determine a short "Reason" (e.g., "Unit cost spike >30%", "KPI target missed", "Status: Paused but high spend").
 
 CRITICAL OUTPUT FORMAT:
 You MUST format your response exactly like this template:
