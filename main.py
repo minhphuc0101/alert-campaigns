@@ -109,7 +109,7 @@ def analyze_data(df, date_col):
     df = df[~df['campaign name'].str.contains('app install|lead', case=False, na=False)]
     
     campaigns = df['campaign name'].unique()
-    available_dates = sorted(df[date_col].unique(), reverse=True)
+    available_dates = df[date_col].drop_duplicates().sort_values(ascending=False).tolist()
     if not available_dates:
         return []
         
@@ -131,44 +131,24 @@ def analyze_data(df, date_col):
         kpi_type, kpi_target = extract_kpi_target(campaign)
         if kpi_type and kpi_target:
             if kpi_type == 'CPE':
-                if total_spent > 0 and total_engagement == 0:
+                if total_engagement > kpi_target:
                     alerts.append({
                         'campaign': campaign,
                         'status': status,
-                        'issue': f"Actual CPE is undefined (no engagements for {total_spent:,.0f} spent).",
+                        'issue': f"Target was {kpi_target:,} Engagement, actual {total_engagement:,.0f}",
                         'spent_line': f"{total_spent:,.0f} (Cap: N/A)",
-                        'metrics': f"Engagement: 0, Reach: {total_reach:,.0f}, Impressions: {total_impressions:,.0f}, Video Views: {total_video_views:,.0f}",
-                        'reason': "Undefined KPI performance"
+                        'metrics': f"Reach: {total_reach:,.0f}, Impressions: {total_impressions:,.0f}, Post Engagement: {total_engagement:,.0f}",
+                        'reason': "Engagement target exceeded"
                     })
-                else:
-                    actual_cpe = total_spent / total_engagement if total_engagement > 0 else 0
-                    if actual_cpe > (kpi_target * 1.05):
-                        alerts.append({
-                            'campaign': campaign,
-                            'status': status,
-                            'issue': f"Target was {kpi_target:,} CPE, currently at {actual_cpe:,.0f} CPE",
-                            'spent_line': f"{total_spent:,.0f} (Cap: N/A)",
-                            'metrics': f"Reach: {total_reach:,.0f}, Impressions: {total_impressions:,.0f}, Post Engagement: {total_engagement:,.0f}",
-                            'reason': "Target KPI exceeded (>5%)"
-                        })
             elif kpi_type == 'CPM':
-                if total_spent > 0 and total_impressions == 0:
-                     alerts.append({
-                        'campaign': campaign,
-                        'status': status,
-                        'issue': f"Actual CPM is undefined (no impressions for {total_spent:,.0f} spent).",
-                        'spent_line': f"{total_spent:,.0f} (Cap: N/A)",
-                        'metrics': f"Reach: {total_reach:,.0f}, Impressions: 0, Video Views: {total_video_views:,.0f}",
-                        'reason': "Undefined KPI performance"
-                    })
-                elif total_impressions < (kpi_target * 0.95):
+                if total_impressions > kpi_target:
                     alerts.append({
                         'campaign': campaign,
                         'status': status,
                         'issue': f"Target was {kpi_target:,.0f} Impressions, actual {total_impressions:,.0f}",
                         'spent_line': f"{total_spent:,.0f} (Cap: N/A)",
                         'metrics': f"Reach: {total_reach:,.0f}, Impressions: {total_impressions:,.0f}",
-                        'reason': "Impression target not met (>5% gap)"
+                        'reason': "Impression target exceeded"
                     })
 
         # 2. Spend Cap Check
