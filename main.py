@@ -125,21 +125,20 @@ You are an expert digital marketing analyst.
 Review the following Facebook ad spend and performance data for the past {LOOKBACK_DAYS} days.
 The data includes: Date, Campaign name, Campaign Status, Amount spent, Campaign Spend Cap, Post Engagement, Reach, Impressions, and 3-Second Video Views.
 
-1. EXCLUSION: COMPLETELY IGNORE any campaigns for "App Installs" or "Leads" / "Lead Generation". Do not analyze or report on them.
-2. NUMERICAL KPI ONLY: Only analyze campaigns that have an EXPLICIT NUMBER associated with a KPI in their name (e.g., "3000 CPE" or "CPM_100"). If a campaign just says "CPE" or "CPM" without a target number, IGNORE IT for KPI analysis.
-3. AGGREGATE DATA: For each unique Campaign Name, sum up all "Amount spent", "Post Engagement", "Reach", "Impressions", and "3-Second Video Views" across the provided data.
-4. EXTRACT KPIs FROM CAMPAIGN NAMES:
-   - "X CPM" or "CPM_X" (e.g., "CPM_100"): Volume target = X * 1000 total Impressions.
-   - "X CPE" or "CPE_X" (e.g., "3000 CPE"): Rate target = Cost Per Engagement <= X.
-5. UNIT COST SPIKE DETECTION: Only perform this for campaigns that survived the previous filters.
-   - Identify the "current" unit cost (latest day with spend).
-   - Calculate the "average unit cost" over the 3 days prior.
-   - ALERT if current unit cost >30% higher than 3-day average.
-6. IDENTIFY ISSUES:
-   - Rate targets: Total Spent / Total Post Engagement > Target.
-   - Volume targets: Total Impressions match/under target relative to spend.
-   - STATUS: You MUST include the "Campaign Status" in the alert header.
-7. ANALYZE RESULTS: Determine a short "Reason" (e.g., "Unit cost spike >30%", "KPI target missed", "Status: Paused but high spend").
+1. EXCLUSION: COMPLETELY IGNORE any campaigns for "App Installs" or "Leads" / "Lead Generation".
+2. NUMERICAL KPI ONLY: Only perform KPI checks if a target number exists (e.g., "3000 CPE", "CPM_100").
+3. ANALYSIS STEP A (7-DAY TOTALS):
+   - Sum up all metrics (Spent, Impressions, Engagement) for each campaign across the full 7-day period.
+   - For CPE campaigns: Check if (Total Spent / Total Engagement) > Target in name.
+   - For CPM campaigns: Check if Total Impressions matches the volume target (X * 1000).
+4. ANALYSIS STEP B (DAILY TREND & SPIKES):
+   - DO NOT aggregate for this step. Look at the data row-by-row.
+   - Compare the unit cost of the LATEST date in the data vs the AVERAGE unit cost of the 3 days immediately preceding it.
+   - If the latest cost is >30% higher, TRIGGER A SPIKE ALERT.
+5. REPORTING:
+   - STATUS: Always include the (Active/Paused) status in the alert.
+   - REASON: Clearly state if it's a "Unit cost spike >30%" or a "KPI target missed". 
+   - ISSUE: Be specific. If it's a spike, show the percentage (e.g., "Unit cost increased by 42% today vs 3-day average").
 
 CRITICAL OUTPUT FORMAT:
 You MUST format your response exactly like this template:
