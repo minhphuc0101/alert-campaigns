@@ -123,18 +123,23 @@ def analyze_with_gemini(data_str):
     prompt = f"""
 You are an expert digital marketing analyst. 
 Review the following Facebook ad spend and performance data for the past {LOOKBACK_DAYS} days.
-The data includes: Date, Campaign name, Amount spent, Campaign Spend Cap, Post Engagement, Reach, Impressions, and 3-Second Video Views.
+The data includes: Date, Campaign name, Campaign Status, Amount spent, Campaign Spend Cap, Post Engagement, Reach, Impressions, and 3-Second Video Views.
 
-CRITICAL INSTRUCTIONS:
-1. AGGREGATE DATA: First, for each unique Campaign Name, sum up all "Amount spent", "Post Engagement", "Reach", "Impressions", and "3-Second Video Views" across all dates in the provided data.
-2. EXTRACT KPIs FROM CAMPAIGN NAMES:
-   - "X CPM" or "CPM_X" (e.g., "CPM_100"): This is a VOLUME target. The target is X * 1000 total Impressions. Example: "CPM_100" means a goal of 100,000 total impressions.
-   - "X CPE" or "CPE_X" (e.g., "3000 CPE"): This is a RATE target. The Cost Per Engagement should be <= X.
-3. IDENTIFY ISSUES:
-   - For CPM (Volume) targets: Check if the aggregated total Impressions are significantly matching or over/under the target relative to the spend time.
-   - For CPE (Rate) targets: Calculate (Total Spent / Total Post Engagement) and compare it against the target.
-   - Generally check for high spend anomalies or pacing issues against "Campaign Spend Cap".
-4. ANALYZE RESULTS: Determine a short "Reason" for each alert (e.g., "Over achieved", "High spend spike", "Target KPI exceeded", "Pacing warning").
+1. EXCLUSION: COMPLETELY IGNORE any campaigns that are for "App Installs". Do not analyze or report on them.
+2. AGGREGATE DATA: For each unique Campaign Name, sum up all "Amount spent", "Post Engagement", "Reach", "Impressions", and "3-Second Video Views" across the provided data.
+3. EXTRACT KPIs FROM CAMPAIGN NAMES:
+   - "X CPM" or "CPM_X" (e.g., "CPM_100"): Volume target = X * 1000 total Impressions.
+   - "X CPE" or "CPE_X" (e.g., "3000 CPE"): Rate target = Cost Per Engagement <= X.
+4. UNIT COST SPIKE DETECTION:
+   - Identify the "current" unit cost (latest day with spend).
+   - Calculate the "average unit cost" for that same campaign over the 3 days prior to the latest day.
+   - ALERT if the current unit cost is >30% higher than the 3-day average unit cost for that campaign.
+   - Use (Spent / Impressions * 1000) for CPM campaigns and (Spent / Engagement) for CPE campaigns.
+5. IDENTIFY ISSUES:
+   - Rate targets: Total Spent / Total Post Engagement > Target.
+   - Volume targets: Total Impressions match/under target relative to spend.
+   - Status check: Note the "Campaign Status" (Active, Paused, etc.).
+6. ANALYZE RESULTS: Determine a short "Reason" (e.g., "Unit cost spike >30%", "Over achieved", "KPI target missed", "Status: Paused but high spend").
 
 CRITICAL OUTPUT FORMAT:
 You MUST format your response exactly like this template:
@@ -143,13 +148,13 @@ Subject: 🚨 Campaign Alert: [Number of campaigns] Campaigns Require Attention
 
 Hi Team,
 
-The following campaigns are currently exceeding their target KPIs or spending anomalies have been detected over the past {LOOKBACK_DAYS} days:
+The following campaigns are currently exceeding their target KPIs or spending anomalies have been detected:
 
-1. [Campaign Name]
-   - 📉 Issue: [e.g., Target was 100,000 Impressions, currently at 80,000; or Target was 700 CPE, currently at 950 CPE]
-   - 💰 Spent: [Total Amount Spent] (Cap: [Spend Cap if applicable])
-   - 📊 Metrics: [Relevant metrics like Total Impressions, Reach, etc.]
-   - 🏷️ Reason: [Short reason like "Target KPI exceeded", "Over achieved", etc.]
+1. [Campaign Name] ([Campaign Status])
+   - 📉 Issue: [e.g., Unit cost spiked by 45% compared to last 3 days avg; Target 100k Imp, at 80k]
+   - 💰 Spent: [Total Amount Spent]
+   - 📊 Metrics: [Relevant metrics]
+   - 🏷️ Reason: [Short reason]
 
 [Repeat for each flagged campaign]
 
