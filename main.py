@@ -143,20 +143,20 @@ def analyze_data(df, date_col, status_col):
                     alerts.append({
                         'campaign': campaign,
                         'status': status,
-                        'issue': f"Lifetime Volume Target exceeded (Target: {kpi_target:,} Engagement, Actual: {total_engagement:,.0f})",
+                        'issue': f"Volume Target reached (Target: {kpi_target:,} engagement, Actual: {total_engagement:,.0f})",
                         'spent_line': f"{total_spent:,.0f} (Lifetime)",
                         'metrics': f"Total Post Engagement: {total_engagement:,.0f}, Reach: {total_reach:,.0f}, Impressions: {total_impressions:,.0f}",
-                        'reason': "Lifetime Engagement Target met"
+                        'reason': "Engagement target achieved"
                     })
             elif kpi_type == 'CPM':
                 if total_impressions > kpi_target:
                     alerts.append({
                         'campaign': campaign,
                         'status': status,
-                        'issue': f"Lifetime Volume Target exceeded (Target: {kpi_target:,.0f} Impressions, Actual: {total_impressions:,.0f})",
+                        'issue': f"Volume Target reached (Target: {kpi_target:,.0f} impressions, Actual: {total_impressions:,.0f})",
                         'spent_line': f"{total_spent:,.0f} (Lifetime)",
                         'metrics': f"Total Impressions: {total_impressions:,.0f}, Reach: {total_reach:,.0f}",
-                        'reason': "Lifetime Impression Target met"
+                        'reason': "Impression target achieved"
                     })
 
         # 2. Spend Cap Check
