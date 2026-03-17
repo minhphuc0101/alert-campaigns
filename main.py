@@ -1,5 +1,6 @@
 import os
 import smtplib
+import re
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import datetime
@@ -7,38 +8,31 @@ from datetime import timedelta
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
-from google import genai
-from google.genai import types
 from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
 
 # Configuration
-# 1. API Keys & Emails
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 SENDER_EMAIL = os.getenv("EMAIL_SENDER_ADDRESS")
 SENDER_PASSWORD = os.getenv("EMAIL_SENDER_PASSWORD")
 RECIPIENT_EMAIL = "phuc.tran@digimind.asia"
 
-# 2. Google Sheets Info
+# Google Sheets Info
 SHEET_ID = os.getenv("GOOGLE_SHEET_ID")
 TAB_NAME = os.getenv("GOOGLE_SHEET_TAB_NAME")
 
-# 3. Settings
+# Settings
 LOOKBACK_DAYS = 7
 
 
 def get_sheets_client():
     """Authenticates and returns a gspread client."""
-    # Define the scopes required by the API
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets.readonly",
         "https://www.googleapis.com/auth/drive.readonly"
     ]
     
-    # We assume the user has a service account JSON downloaed as 'service_account.json'
-    # in the same directory as this script.
     try:
         credentials = Credentials.from_service_account_file(
             "service_account.json", scopes=scopes
@@ -47,8 +41,6 @@ def get_sheets_client():
         return client
     except FileNotFoundError:
         print("Error: 'service_account.json' not found.")
-        print("Please create a Google Cloud Service Account, download the JSON key, name it 'service_account.json', and place it in this folder.")
-        print("Also remember to share your Google Sheet with the service account email address.")
         exit(1)
 
 
@@ -57,11 +49,9 @@ def fetch_recent_data(client):
     try:
         sheet = client.open_by_key(SHEET_ID).worksheet(TAB_NAME)
     except Exception as e:
-        print(f"Error opening Google Sheet (ID: {SHEET_ID}, Tab: {TAB_NAME}): {e}")
+        print(f"Error opening Google Sheet: {e}")
         exit(1)
 
-    # Get all records as a list of dictionaries
-    # We assume the first row has headers: 'Date', 'Campaign name', 'Amount spent'
     data = sheet.get_all_records()
     df = pd.DataFrame(data)
 
@@ -69,188 +59,172 @@ def fetch_recent_data(client):
         print("The sheet is empty.")
         return None
 
-    # Standardize column names (lowercase and strip spaces for easier matching)
+    # Standardize column names
     df.columns = [str(c).strip().lower() for c in df.columns]
 
-    # Find the date column
-    date_col = None
-    # Common variations of "date"
+    # Find the date/day column
     date_keywords = ['date', 'day', 'time', 'period']
-    
-    print(f"DEBUG: Processing headers: {df.columns.tolist()}")
-    
-    for col in df.columns:
-        col_clean = str(col).strip().lower()
-        if any(keyword in col_clean for keyword in date_keywords):
-            date_col = col
-            print(f"DEBUG: Selected '{date_col}' as the date column.")
-            break
+    date_col = next((col for col in df.columns if any(kw in col for kw in date_keywords)), None)
             
     if not date_col:
-        print("Error: Could not determine which column contains the Date.")
-        print(f"Found columns: {df.columns.tolist()}")
-        print(f"Searched for keywords: {date_keywords}")
+        print(f"Error: Could not find a date column. Headers: {df.columns.tolist()}")
         return None
 
-    # Convert date column to datetime objects
-    try:
-        # Infer datetime format automatically
-        df[date_col] = pd.to_datetime(df[date_col], format='mixed', dayfirst=False)
-    except Exception as e:
-        print(f"Error parsing dates in column '{date_col}': {e}")
-        return None
+    # Convert to datetime
+    df[date_col] = pd.to_datetime(df[date_col], format='mixed', dayfirst=False)
 
-    # Calculate the cutoff date (7 days ago)
-    cutoff_date = datetime.datetime.now() - timedelta(days=LOOKBACK_DAYS)
-    
     # Filter for the last 7 days
+    cutoff_date = pd.Timestamp.now().normalize() - timedelta(days=LOOKBACK_DAYS)
     recent_df = df[df[date_col] >= cutoff_date]
-    
-    # Sort by date
     recent_df = recent_df.sort_values(by=date_col, ascending=False)
     
-    return recent_df
+    return recent_df, date_col
 
 
-def analyze_with_gemini(data_str):
-    """Sends the data to Gemini and asks for analysis on high-spending campaigns."""
-    if not GEMINI_API_KEY:
-        print("Error: GEMINI_API_KEY environment variable not set.")
-        return None
-
-    client = genai.Client(api_key=GEMINI_API_KEY)
+def extract_kpi_target(campaign_name):
+    """Extracts numerical target from name (e.g. '3000 CPE' -> 3000, 'CPM_100' -> 100)."""
+    # Look for patterns like '3000 CPE', 'CPM_100', '700 CPM', etc.
+    cpe_match = re.search(r'(\d+)\s*CPE|CPE[_\s]*(\d+)', campaign_name, re.I)
+    cpm_match = re.search(r'(\d+)\s*CPM|CPM[_\s]*(\d+)', campaign_name, re.I)
     
-    prompt = f"""
-You are an expert digital marketing analyst. 
-Review the following Facebook ad spend and performance data for the past {LOOKBACK_DAYS} days.
-The data includes: Date, Campaign name, Campaign Status, Amount spent, Campaign Spend Cap, Post Engagement, Reach, Impressions, and 3-Second Video Views.
+    if cpe_match:
+        return 'CPE', int(cpe_match.group(1) or cpe_match.group(2))
+    if cpm_match:
+        # CPM is volume: X * 1000 impressions
+        return 'CPM', int(cpm_match.group(1) or cpm_match.group(2)) * 1000
+        
+    return None, None
 
-1. EXCLUSION: COMPLETELY IGNORE any campaigns for "App Installs" or "Leads" / "Lead Generation".
-2. NUMERICAL KPI ONLY: Only perform KPI checks if a target number exists (e.g., "3000 CPE", "CPM_100").
-3. ANALYSIS STEP A (7-DAY TOTALS):
-   - Sum up all metrics (Spent, Impressions, Engagement) for each campaign across the full 7-day period.
-   - For CPE campaigns: Check if (Total Spent / Total Engagement) > Target in name.
-   - For CPM campaigns: Check if Total Impressions matches the volume target (X * 1000).
-4. ANALYSIS STEP B (DAILY TREND & SPIKES):
-   - DO NOT aggregate for this step. Look at the data row-by-row.
-   - Compare the unit cost of the LATEST date in the data vs the AVERAGE unit cost of the 3 days immediately preceding it.
-   - If the latest cost is >30% higher, TRIGGER A SPIKE ALERT.
-5. REPORTING:
-   - STATUS: Always include the (Active/Paused) status in the alert.
-   - REASON: Clearly state if it's a "Unit cost spike >30%" or a "KPI target missed". 
-   - ISSUE: Be specific. If it's a spike, show the percentage (e.g., "Unit cost increased by 42% today vs 3-day average").
 
-CRITICAL OUTPUT FORMAT:
-You MUST format your response exactly like this template:
-
-Subject: 🚨 Campaign Alert: [Number of campaigns] Campaigns Require Attention
-
-Hi Team,
-
-The following campaigns are currently exceeding their target KPIs or spending anomalies have been detected:
-
-1. [Campaign Name] ([Campaign Status])
-   - 📉 Issue: [e.g., Unit cost spiked by 45% compared to last 3 days avg; Target 100k Imp, at 80k]
-   - 💰 Spent: [Total Amount Spent]
-   - 📊 Metrics: [Relevant metrics]
-   - 🏷️ Reason: [Short reason]
-
-[Repeat for each flagged campaign]
-
----
-Summary of Good/Normal Campaigns:
-[Brief 1-line summary of other campaigns that are pacing well]
-
-Please review your Ads Manager.
-- AI Alert System
-
-If spending looks completely normal, KPIs are being met, and no single campaign is dominating the budget unusually, simply output the exact sentence: "Spending is within normal parameters and no action is required today."
-
-Here is the data:
-{data_str}
-"""
+def analyze_data(df, date_col):
+    """Performs mathematical analysis for alerts."""
+    alerts = []
     
-    try:
-        response = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=prompt,
-        )
-        return response.text
-    except Exception as e:
-        print(f"Error calling Gemini API: {e}")
-        return None
+    # Exclude App Installs and Leads
+    df = df[~df['campaign name'].str.contains('app install|lead', case=False, na=False)]
+    
+    campaigns = df['campaign name'].unique()
+    
+    # Group dates to find 'Yesterday' (latest date) and 'Prior 3 Days'
+    available_dates = sorted(df[date_col].unique(), reverse=True)
+    if not available_dates:
+        return []
+        
+    latest_date = available_dates[0]
+    prior_3_dates = available_dates[1:4]
+    
+    for campaign in campaigns:
+        campaign_df = df[df['campaign name'] == campaign]
+        status = campaign_df.iloc[0].get('campaign status', 'Unknown')
+        
+        # 1. KPI Check (7-Day Aggregate)
+        kpi_type, kpi_target = extract_kpi_target(campaign)
+        if kpi_type and kpi_target:
+            total_spent = campaign_df['amount spent'].sum()
+            total_engagement = campaign_df['post engagement'].sum()
+            total_impressions = campaign_df['impressions'].sum()
+            
+            if kpi_type == 'CPE':
+                actual_cpe = total_spent / total_engagement if total_engagement > 0 else 0
+                if actual_cpe > kpi_target:
+                    alerts.append({
+                        'campaign': campaign,
+                        'status': status,
+                        'issue': f"Target {kpi_target} CPE, actual {actual_cpe:,.0f} CPE",
+                        'metrics': f"Spent: {total_spent:,.0f}, Engagement: {total_engagement:,.0f}",
+                        'reason': "Target KPI exceeded"
+                    })
+            elif kpi_type == 'CPM':
+                # Volume target: Impressions reached
+                if total_impressions < kpi_target:
+                    alerts.append({
+                        'campaign': campaign,
+                        'status': status,
+                        'issue': f"Target {kpi_target:,.0f} Impressions, actual {total_impressions:,.0f}",
+                        'metrics': f"Spent: {total_spent:,.0f}",
+                        'reason': "Impression target not met"
+                    })
+
+        # 2. Spend Anomaly (Yesterday vs Avg 3 Days)
+        yesterday_data = campaign_df[campaign_df[date_col] == latest_date]
+        prior_data = campaign_df[campaign_df[date_col].isin(prior_3_dates)]
+        
+        if not yesterday_data.empty and not prior_data.empty:
+            yesterday_spend = yesterday_data['amount spent'].sum()
+            avg_prior_spend = prior_data['amount spent'].sum() / len(prior_3_dates)
+            
+            if avg_prior_spend > 0:
+                percent_increase = (yesterday_spend - avg_prior_spend) / avg_prior_spend
+                if percent_increase > 0.30: # 30% jump
+                    alerts.append({
+                        'campaign': campaign,
+                        'status': status,
+                        'issue': f"Yesterday spend ({yesterday_spend:,.0f}) is {percent_increase*100:.1f}% higher than 3-day avg ({avg_prior_spend:,.0f})",
+                        'metrics': f"Date: {latest_date.strftime('%Y-%m-%d')}",
+                        'reason': "High spend anomaly"
+                    })
+
+    return alerts
 
 
-def send_email_alert(subject, body):
-    """Sends an email using SMTP."""
+def format_email(alerts):
+    if not alerts:
+        return None, "Spending is within normal parameters and no action is required today."
+        
+    subject = f"🚨 Campaign Alert: {len(alerts)} Campaigns Require Attention"
+    
+    body = "Hi Team,\n\nThe following campaigns are currently exceeding their target KPIs or spending anomalies have been detected:\n\n"
+    
+    for i, alert in enumerate(alerts, 1):
+        body += f"{i}. {alert['campaign']} ({alert['status']})\n"
+        body += f"   - 📉 Issue: {alert['issue']}\n"
+        body += f"   - 💰 Spent: {alert['metrics']}\n"
+        body += f"   - 🏷️ Reason: {alert['reason']}\n\n"
+        
+    body += "---\nPlease review your Ads Manager.\n- Alert System"
+    
+    return subject, body
+
+
+def send_email(subject, body):
     if not SENDER_EMAIL or not SENDER_PASSWORD:
-        print("Error: EMAIL_SENDER_ADDRESS or EMAIL_SENDER_PASSWORD not set.")
-        return
+        return print("Error: Email credentials missing.")
 
     msg = MIMEMultipart()
     msg['From'] = SENDER_EMAIL
     msg['To'] = RECIPIENT_EMAIL
     msg['Subject'] = subject
-
     msg.attach(MIMEText(body, 'plain'))
 
     try:
-        # Assuming Gmail SMTP. Change this if using a different provider (e.g., SendGrid, Outlook)
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls()
         server.login(SENDER_EMAIL, SENDER_PASSWORD)
-        text = msg.as_string()
-        server.sendmail(SENDER_EMAIL, RECIPIENT_EMAIL, text)
+        server.sendmail(SENDER_EMAIL, RECIPIENT_EMAIL, msg.as_string())
         server.quit()
-        print(f"Successfully sent alert email to {RECIPIENT_EMAIL}")
+        print(f"Email sent to {RECIPIENT_EMAIL}")
     except Exception as e:
         print(f"Error sending email: {e}")
 
 
 def main():
-    print(f"Starting Campaign Alert Script (v1.2 - Robust Logic) at {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    
-    print("1. Authenticating with Google Sheets...")
+    print(f"Starting Campaign Alert Script (v2.0 - Pure Python) at {datetime.datetime.now()}")
     client = get_sheets_client()
+    data_tuple = fetch_recent_data(client)
     
-    print(f"2. Fetching data for the last {LOOKBACK_DAYS} days...")
-    recent_df = fetch_recent_data(client)
-    
-    if recent_df is None or recent_df.empty:
-        print("No recent data found. Exiting.")
+    if not data_tuple:
         return
-        
-    print(f"Found {len(recent_df)} records.")
     
-    # Convert dataframe to a string representation for the AI
-    # We only take the relevant columns assuming they containt 'campaign' and 'amount' or 'spend'
-    # For safety, let's just convert the whole dataframe to CSV string
-    data_csv_str = recent_df.to_csv(index=False)
+    df, date_col = data_tuple
+    alerts = analyze_data(df, date_col)
     
-    print("3. Analyzing data with Google Gemini AI...")
-    analysis_text = analyze_with_gemini(data_csv_str)
+    subject, body = format_email(alerts)
     
-    if not analysis_text:
-        print("Failed to get analysis from Gemini. Exiting.")
-        return
-        
-    print("--- Gemini Analysis Summary ---")
-    print(analysis_text)
-    print("-------------------------------")
-    
-    # Check if we should send an email based on the AI's response
-    # If the AI says everything is normal, we might skip the email or send a quiet summary
-    if "no action is required today" in analysis_text.lower() and "normal" in analysis_text.lower():
-        print("AI indicated spending is normal. Still sending a daily summary.")
-        subject = f"Daily Campaign Spend Summary - {datetime.datetime.now().strftime('%Y-%m-%d')}"
+    if subject:
+        print(f"Alerts found! Sending email...")
+        send_email(subject, body)
     else:
-        print("AI found actionable insights. Sending an Alert.")
-        subject = f"ACTION REQUIRED: High Spend Campaign Alert - {datetime.datetime.now().strftime('%Y-%m-%d')}"
-        
-    print(f"4. Sending email to {RECIPIENT_EMAIL}...")
-    send_email_alert(subject, analysis_text)
-    
-    print("Done!")
+        print(body)
 
 if __name__ == "__main__":
     main()
