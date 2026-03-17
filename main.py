@@ -23,7 +23,6 @@ SHEET_ID = os.getenv("GOOGLE_SHEET_ID")
 TAB_NAME = os.getenv("GOOGLE_SHEET_TAB_NAME")
 
 # Settings
-LOOKBACK_DAYS = 7
 
 
 def get_sheets_client():
@@ -43,8 +42,8 @@ def get_sheets_client():
         exit(1)
 
 
-def fetch_recent_data(client):
-    """Fetches data from the Google Sheet and filters for the last LOOKBACK_DAYS."""
+def fetch_spreadsheet_data(client):
+    """Fetches data from the Google Sheet and prepares it for analysis."""
     try:
         sheet = client.open_by_key(SHEET_ID).worksheet(TAB_NAME)
     except Exception as e:
@@ -71,13 +70,15 @@ def fetch_recent_data(client):
 
     # Convert to datetime
     df[date_col] = pd.to_datetime(df[date_col], format='mixed', dayfirst=False)
-
-    # Filter for the last 7 days
-    cutoff_date = pd.Timestamp.now().normalize() - timedelta(days=LOOKBACK_DAYS)
-    recent_df = df[df[date_col] >= cutoff_date]
-    recent_df = recent_df.sort_values(by=date_col, ascending=False)
     
-    return recent_df, date_col
+    # Sort by date
+    df = df.sort_values(by=date_col, ascending=False)
+    
+    # Find the status column
+    status_keywords = ['status', 'state']
+    status_col = next((col for col in df.columns if any(kw in col for kw in status_keywords)), None)
+    
+    return df, date_col, status_col
 
 
 def extract_kpi_target(campaign_name):
@@ -101,11 +102,11 @@ def extract_kpi_target(campaign_name):
     return None, None
 
 
-def analyze_data(df, date_col):
+def analyze_data(df, date_col, status_col):
     """Performs mathematical analysis for alerts."""
     alerts = []
     
-    # Exclude App Installs and Leads
+    # Exclude App Installs and Leads (use regex for better matching)
     df = df[~df['campaign name'].str.contains('app install|lead', case=False, na=False)]
     
     campaigns = df['campaign name'].unique()
@@ -119,7 +120,14 @@ def analyze_data(df, date_col):
     for campaign in campaigns:
         campaign_df = df[df['campaign name'] == campaign]
         latest_row = campaign_df.iloc[0]
-        status = latest_row.get('campaign status', 'unknown')
+        
+        # Determine status
+        if status_col:
+             status = str(latest_row.get(status_col, 'unknown')).strip()
+        else:
+             status = latest_row.get('campaign status', 'unknown')
+        
+        status = status.lower() if isinstance(status, str) else 'unknown'
         
         total_spent = campaign_df['amount spent'].sum()
         total_engagement = campaign_df['post engagement'].sum()
@@ -127,7 +135,7 @@ def analyze_data(df, date_col):
         total_reach = campaign_df['reach'].sum()
         total_video_views = campaign_df.get('3-second video views', pd.Series([0])).sum()
         
-        # 1. KPI Check
+        # 1. Lifetime Volume KPI Check
         kpi_type, kpi_target = extract_kpi_target(campaign)
         if kpi_type and kpi_target:
             if kpi_type == 'CPE':
@@ -135,20 +143,20 @@ def analyze_data(df, date_col):
                     alerts.append({
                         'campaign': campaign,
                         'status': status,
-                        'issue': f"Target was {kpi_target:,} Engagement, actual {total_engagement:,.0f}",
-                        'spent_line': f"{total_spent:,.0f} (Cap: N/A)",
-                        'metrics': f"Reach: {total_reach:,.0f}, Impressions: {total_impressions:,.0f}, Post Engagement: {total_engagement:,.0f}",
-                        'reason': "Engagement target exceeded"
+                        'issue': f"Lifetime Volume Target exceeded (Target: {kpi_target:,} Engagement, Actual: {total_engagement:,.0f})",
+                        'spent_line': f"{total_spent:,.0f} (Lifetime)",
+                        'metrics': f"Total Post Engagement: {total_engagement:,.0f}, Reach: {total_reach:,.0f}, Impressions: {total_impressions:,.0f}",
+                        'reason': "Lifetime Engagement Target met"
                     })
             elif kpi_type == 'CPM':
                 if total_impressions > kpi_target:
                     alerts.append({
                         'campaign': campaign,
                         'status': status,
-                        'issue': f"Target was {kpi_target:,.0f} Impressions, actual {total_impressions:,.0f}",
-                        'spent_line': f"{total_spent:,.0f} (Cap: N/A)",
-                        'metrics': f"Reach: {total_reach:,.0f}, Impressions: {total_impressions:,.0f}",
-                        'reason': "Impression target exceeded"
+                        'issue': f"Lifetime Volume Target exceeded (Target: {kpi_target:,.0f} Impressions, Actual: {total_impressions:,.0f})",
+                        'spent_line': f"{total_spent:,.0f} (Lifetime)",
+                        'metrics': f"Total Impressions: {total_impressions:,.0f}, Reach: {total_reach:,.0f}",
+                        'reason': "Lifetime Impression Target met"
                     })
 
         # 2. Spend Cap Check
@@ -214,7 +222,7 @@ def format_email(alerts):
         body += f"   - 📉 Issue: {alert['issue']}\n"
         body += f"   - 💰 Spent: {alert['spent_line']}\n"
         body += f"   - 📊 Metrics: {alert['metrics']}\n"
-        body += f" - campaign status: {alert['status'].lower()}\n\n"
+        body += f"   - 🚦 Campaign Status: {alert['status']}\n\n"
         
     body += "---\nPlease review your Ads Manager.\n- Alert System"
     return subject, body
@@ -242,11 +250,11 @@ def send_email(subject, body):
 def main():
     print(f"Starting Campaign Alert Script (v4.0 - Python Only) at {datetime.datetime.now()}")
     client = get_sheets_client()
-    result = fetch_recent_data(client)
+    result = fetch_spreadsheet_data(client)
     if result is None: return
     
-    df, date_col = result
-    alerts = analyze_data(df, date_col)
+    df, date_col, status_col = result
+    alerts = analyze_data(df, date_col, status_col)
     
     subject, body = format_email(alerts)
     if subject:
