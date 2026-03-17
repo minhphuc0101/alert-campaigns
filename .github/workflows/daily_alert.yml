@@ -1,0 +1,41 @@
+name: Daily Campaign Spend Alert
+
+on:
+  schedule:
+    # Runs at 01:00 UTC every day (which is 08:00 AM in UTC+7 / Vietnam Time)
+    - cron: '0 1 * * *'
+  # Allows you to trigger the run manually from the GitHub Actions tab
+  workflow_dispatch:
+
+jobs:
+  run-alert-script:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+        
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+          
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          
+      - name: Create Google Service Account JSON
+        # Creates the service_account.json file dynamically from a GitHub Secret defined by the user
+        run: |
+          echo '${{ secrets.GCP_SERVICE_ACCOUNT_JSON }}' > service_account.json
+          
+      - name: Run Alert Script
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          EMAIL_SENDER_ADDRESS: ${{ secrets.EMAIL_SENDER_ADDRESS }}
+          EMAIL_SENDER_PASSWORD: ${{ secrets.EMAIL_SENDER_PASSWORD }}
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+          GOOGLE_SHEET_TAB_NAME: ${{ secrets.GOOGLE_SHEET_TAB_NAME }}
+        run: python main.py

@@ -1,0 +1,5 @@
+gspread
+google-auth
+google-genai
+pandas
+python-dotenv
