@@ -213,7 +213,7 @@ def analyze_data(df, date_col, status_col, metric_map, ad_account_col):
 
     # Meta Automation Check (V6.0)
     unique_account_ids = df[ad_account_col].dropna().unique() if ad_account_col else []
-    if not unique_account_ids and FB_AD_ACCOUNT_ID:
+    if len(unique_account_ids) == 0 and FB_AD_ACCOUNT_ID:
         unique_account_ids = [FB_AD_ACCOUNT_ID]
         
     meta_rules = fetch_meta_automated_rules(FB_ACCESS_TOKEN, [str(i) for i in unique_account_ids])
