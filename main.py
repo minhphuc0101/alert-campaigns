@@ -166,30 +166,47 @@ def fetch_meta_automated_rules(access_token, ad_account_ids):
             
             try:
                 account = AdAccount(full_id)
-                # Fetch only the rules library - this is the most secure and efficient call
-                rules = account.get_ad_rules_library(fields=['name', 'status', 'evaluation_spec', 'execution_spec'])
+                # Fetch more fields to understand the rule structure better (V7.2)
+                rules = account.get_ad_rules_library(fields=['name', 'status', 'evaluation_spec', 'execution_spec', 'entity_type'])
                 
                 target_campaign_ids = set()
+                has_account_wide_rule = False
+                
                 for rule in rules:
                     if rule.get('status') != 'ENABLED': continue
                     
-                    # We look for rules that PAUSE or TURN OFF campaigns
+                    # Look for PAUSE or TURN_OFF effects
                     exec_spec = rule.get('execution_spec', {})
-                    if exec_spec.get('execution_type') not in ['PAUSE', 'TURN_OFF_CAMPAIGN', 'TURN_OFF_ADGROUP']:
+                    if exec_spec.get('execution_type') not in ['PAUSE', 'TURN_OFF_CAMPAIGN', 'TURN_OFF_ADGROUP', 'TURN_OFF_AD']:
                         continue
                     
-                    # Extract the Campaign IDs this rule applies to
+                    # Check the filters in evaluation_spec
                     eval_spec = rule.get('evaluation_spec', {})
                     filters = eval_spec.get('filters', [])
+                    
+                    # V7.2: Detect if this is an account-wide rule
+                    # If it's enabled and has NO filters for specific IDs, it works for the whole account
+                    is_id_specific = False
                     for f in filters:
-                        if f.get('field') == 'campaign.id':
+                        if f.get('field') in ['campaign.id', 'adset.id', 'ad.id', 'id', 'entity_id']:
+                            is_id_specific = True
                             vals = f.get('value')
                             if isinstance(vals, list):
                                 target_campaign_ids.update([str(v) for v in vals])
                             else:
                                 target_campaign_ids.add(str(vals))
+                    
+                    if not is_id_specific:
+                        # This rule applies to ALL active objects in the account or has a broader filter
+                        has_account_wide_rule = True
+                        print(f"Notice: Found account-wide automation rule '{rule.get('name')}' for {full_id}")
                 
-                rules_by_account[full_id] = target_campaign_ids
+                # If account-wide rule exists, we store a special flag
+                if has_account_wide_rule:
+                    rules_by_account[full_id] = "ACCOUNT_WIDE_PROTECTED"
+                else:
+                    rules_by_account[full_id] = target_campaign_ids
+                    
             except Exception as e:
                 print(f"Error fetching rules for {full_id}: {e}")
                 rules_by_account[full_id] = f"Error: {str(e)}"
@@ -223,7 +240,7 @@ def analyze_data(df, date_col, status_col, metric_map, ad_account_col, ad_accoun
     reach_col = metric_map['reach']
     views_col = metric_map['video_views']
 
-    # Meta Automation Check (V6.2)
+    # Meta Automation Check (V7.2)
     unique_account_ids = df[ad_account_col].dropna().unique() if ad_account_col else []
     if len(unique_account_ids) == 0 and FB_AD_ACCOUNT_ID:
         unique_account_ids = [FB_AD_ACCOUNT_ID]
@@ -321,7 +338,7 @@ def analyze_data(df, date_col, status_col, metric_map, ad_account_col, ad_accoun
                         'reason': "High spend anomaly"
                     })
 
-        # 3. Meta Automation Rule Audit (V7.1)
+        # 3. Meta Automation Rule Audit (V7.2)
         if status == 'active':
             # Get account IDs and name from sheet
             sheet_acc_id = str(latest_row.get(ad_account_col, '')).strip() if ad_account_col else ''
@@ -355,15 +372,15 @@ def analyze_data(df, date_col, status_col, metric_map, ad_account_col, ad_accoun
                     if isinstance(rules_data, str) and rules_data.startswith('Error:'):
                         missing_automation_alerts.append({
                             'campaign': campaign,
-                            'status': status,
+                            'acc_name': acc_name,
                             'issue': f"Meta Audit Skipped: {rules_data}",
-                            'spent_line': f"Account: {full_acc_id}",
-                            'metrics': "Manual check required",
                             'reason': "Missing Meta Automation"
                         })
+                    elif rules_data == "ACCOUNT_WIDE_PROTECTED":
+                        # Protected by a global rule, skip alert for this campaign
+                        pass
                     else:
-                        # V6.8 Final Logic: Check specific ID provided in sheet
-                        # If ID is missing, we alert that we can't perform a precise check
+                        # V7.2 Final Logic: Check specific ID provided in sheet
                         is_covered = False
                         if camp_id and str(camp_id) in rules_data:
                             is_covered = True
@@ -411,7 +428,7 @@ def format_email(alert_groups):
     if not has_alerts and not alert_groups.get('audit_error'):
         return None, "Spending is within normal parameters and no action is required today."
         
-    subject = f"🚨 Action Required: Campaign Alert [V7.1 - REPORT REFINED] - {datetime.datetime.now().strftime('%Y-%m-%d')}"
+    subject = f"🚨 Action Required: Campaign Alert [V7.2 - AUDIT BROADENED] - {datetime.datetime.now().strftime('%Y-%m-%d')}"
     body = "Hi Team,\n\nThe following campaigns require attention based on their performance and spending patterns:\n\n"
     
     if alert_groups.get('audit_error'):
@@ -451,7 +468,7 @@ def format_email(alert_groups):
             body += f"{i}. {alert['campaign']}, {alert['acc_name']}\n"
         body += "\n"
             
-    body += "---\nPlease review your Ads Manager.\n- Alert System (V7.1)"
+    body += "---\nPlease review your Ads Manager.\n- Alert System (V7.2)"
     return subject, body
 
 
@@ -475,7 +492,7 @@ def send_email(subject, body):
 
 
 def main():
-    print(f"Starting Campaign Alert Script (v7.1 - concise reporting) at {datetime.datetime.now()}")
+    print(f"Starting Campaign Alert Script (v7.2 - broadened audit) at {datetime.datetime.now()}")
     client = get_sheets_client()
     result = fetch_spreadsheet_data(client)
     if result is None: return
