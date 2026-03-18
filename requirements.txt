@@ -3,3 +3,4 @@ google-auth
 google-genai
 pandas
 python-dotenv
+facebook-business
