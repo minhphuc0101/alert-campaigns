@@ -163,6 +163,13 @@ def analyze_data(df, date_col, status_col, metric_map):
         campaign_df = df[df['campaign name'] == campaign]
         latest_row = campaign_df.iloc[0]
         
+        # Calculate sums (Metrics are already cleaned to numeric in fetch)
+        total_spent = campaign_df[spent_col].sum() if spent_col else 0
+        
+        # --- NEW V5.2: Threshold Check ---
+        if total_spent < 2000000:
+            continue
+            
         # Determine status
         if status_col:
              status = str(latest_row.get(status_col, 'unknown')).strip()
@@ -171,8 +178,6 @@ def analyze_data(df, date_col, status_col, metric_map):
         
         status = status.lower() if isinstance(status, str) else 'unknown'
         
-        # Calculate sums (Metrics are already cleaned to numeric in fetch)
-        total_spent = campaign_df[spent_col].sum() if spent_col else 0
         total_engagement = campaign_df[eng_col].sum() if eng_col else 0
         total_impressions = campaign_df[imp_col].sum() if imp_col else 0
         total_reach = campaign_df[reach_col].sum() if reach_col else 0
@@ -242,32 +247,47 @@ def analyze_data(df, date_col, status_col, metric_map):
                         'reason': "High spend anomaly"
                     })
 
-    # Remove duplicates if a campaign triggered multiple alerts
-    unique_alerts = []
-    seen = set()
-    for a in alerts:
-        key = f"{a['campaign']}_{a['reason']}"
-        if key not in seen:
-            unique_alerts.append(a)
-            seen.add(key)
-    return unique_alerts
+    # Categorize alerts into Sections (V5.2)
+    kpi_alerts = [a for a in alerts if a['reason'] in ["Engagement target achieved", "Impression target achieved", "Spending exceeds cap"]]
+    anomaly_alerts = [a for a in alerts if a['reason'] == "High spend anomaly"]
+    
+    return {
+        'kpi': kpi_alerts,
+        'anomaly': anomaly_alerts
+    }
 
 
-def format_email(alerts):
-    if not alerts:
+def format_email(alert_groups):
+    has_alerts = any(alert_groups.values())
+    if not has_alerts:
         return None, "Spending is within normal parameters and no action is required today."
         
-    subject = f"🚨 Action Required: Campaign Alert [V5.1 - ROBUST MAPPING] - {datetime.datetime.now().strftime('%Y-%m-%d')}"
-    body = "Hi Team,\n\nThe following campaigns are currently exceeding their target KPIs or spending anomalies have been detected:\n\n"
+    subject = f"🚨 Action Required: Campaign Alert [V5.2 - SECTIONED REPORT] - {datetime.datetime.now().strftime('%Y-%m-%d')}"
+    body = "Hi Team,\n\nThe following campaigns require attention based on their performance and spending patterns:\n\n"
     
-    for i, alert in enumerate(alerts, 1):
-        body += f"{i}. {alert['campaign']}\n"
-        body += f"   - ❗ Issue: {alert['issue']}\n"
-        body += f"   - 💰 Spent: {alert['spent_line']}\n"
-        body += f"   - 📊 Metrics: {alert['metrics']}\n"
-        body += f"   - 🚦 Campaign Status: {alert['status']}\n\n"
-        
-    body += "---\nPlease review your Ads Manager.\n- Alert System"
+    # Section 1: KPI Achievement
+    if alert_groups['kpi']:
+        body += "🔴 SECTION 1: OVER-ACHIEVED VOLUME KPI\n"
+        body += "========================================\n"
+        for i, alert in enumerate(alert_groups['kpi'], 1):
+            body += f"{i}. {alert['campaign']}\n"
+            body += f"   - ❗ Issue: {alert['issue']}\n"
+            body += f"   - 💰 Spent: {alert['spent_line']}\n"
+            body += f"   - 📊 Metrics: {alert['metrics']}\n"
+            body += f"   - 🚦 Campaign Status: {alert['status']}\n\n"
+    
+    # Section 2: Spend Anomalies
+    if alert_groups['anomaly']:
+        body += "⚠️ SECTION 2: HIGH SPENDING YESTERDAY\n"
+        body += "========================================\n"
+        for i, alert in enumerate(alert_groups['anomaly'], 1):
+            body += f"{i}. {alert['campaign']}\n"
+            body += f"   - ❗ Issue: {alert['issue']}\n"
+            body += f"   - 💰 Spent: {alert['spent_line']}\n"
+            body += f"   - 📊 Metrics: {alert['metrics']}\n"
+            body += f"   - 🚦 Campaign Status: {alert['status']}\n\n"
+            
+    body += "---\nPlease review your Ads Manager.\n- Alert System (V5.2)"
     return subject, body
 
 
@@ -291,17 +311,18 @@ def send_email(subject, body):
 
 
 def main():
-    print(f"Starting Campaign Alert Script (v5.1 - Robust Mapping) at {datetime.datetime.now()}")
+    print(f"Starting Campaign Alert Script (v5.2 - Refined Logic) at {datetime.datetime.now()}")
     client = get_sheets_client()
     result = fetch_spreadsheet_data(client)
     if result is None: return
     
     df, date_col, status_col, metric_map = result
-    alerts = analyze_data(df, date_col, status_col, metric_map)
+    alert_groups = analyze_data(df, date_col, status_col, metric_map)
     
-    subject, body = format_email(alerts)
+    subject, body = format_email(alert_groups)
     if subject:
-        print(f"Found {len(alerts)} alerts. Sending email...")
+        total_count = len(alert_groups['kpi']) + len(alert_groups['anomaly'])
+        print(f"Found {total_count} alerts. Sending email...")
         send_email(subject, body)
     else:
         print(body)
