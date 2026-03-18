@@ -85,7 +85,7 @@ def fetch_spreadsheet_data(client):
     date_col = find_col(['date', 'day'])
     status_col = find_col(['status', 'state'])
     ad_account_col = find_col(['ad account id', 'account id', 'account_id'])
-    campaign_id_col = find_col(['campaign id', 'id', 'campaign_id'])
+    campaign_id_col = find_col(['campaign id', 'id', 'campaign_id', 'cp id', 'meta id'])
     
     # Metrics Mapping
     metric_map = {
@@ -356,11 +356,12 @@ def analyze_data(df, date_col, status_col, metric_map, ad_account_col, campaign_
                             'reason': "Missing Meta Automation"
                         })
                     else:
-                        # V6.5 Precise Lookup
+                        # V6.6 Precise Lookup
                         final_camp_id = camp_id
                         acc_id_lookup = campaign_id_map.get(full_acc_id, {})
                         lookup_status = "OK"
                         
+                        # Only try lookup if ID is missing from sheet
                         if not final_camp_id:
                             if isinstance(acc_id_lookup, dict) and campaign in acc_id_lookup:
                                 final_camp_id = acc_id_lookup[campaign]
@@ -372,12 +373,16 @@ def analyze_data(df, date_col, status_col, metric_map, ad_account_col, campaign_
                             is_covered = True
                         
                         if not is_covered:
+                             # If we have a Campaign ID (from sheet), we ignore lookup errors
+                             if camp_id:
+                                 lookup_status = "OK"
+
                              issue_msg = "No active 'Pause' rule found for this campaign in Meta"
                              detail_msg = f"Campaign ID: {final_camp_id if final_camp_id else 'Not found'}"
                              
                              if lookup_status == "403_ERROR":
                                  issue_msg = "Auditor cannot find Campaign ID due to Meta 403 error"
-                                 detail_msg = "ACTION: Please add 'Campaign ID' column to your Google Sheet manually."
+                                 detail_msg = "ACTION: Please ensure 'Campaign ID' column in sheet is accurate."
 
                              missing_automation_alerts.append({
                                 'campaign': campaign,
@@ -416,7 +421,7 @@ def format_email(alert_groups):
     if not has_alerts and not alert_groups.get('audit_error'):
         return None, "Spending is within normal parameters and no action is required today."
         
-    subject = f"🚨 Action Required: Campaign Alert [V6.5 - PRECISE AUDIT] - {datetime.datetime.now().strftime('%Y-%m-%d')}"
+    subject = f"🚨 Action Required: Campaign Alert [V6.6 - AUDIT READY] - {datetime.datetime.now().strftime('%Y-%m-%d')}"
     body = "Hi Team,\n\nThe following campaigns require attention based on their performance and spending patterns:\n\n"
     
     if alert_groups.get('audit_error'):
@@ -458,7 +463,7 @@ def format_email(alert_groups):
             body += f"   - 💰 Detail: {alert['spent_line']}\n"
             body += f"   - 🚦 Campaign Status: {alert['status']}\n\n"
             
-    body += "---\nPlease review your Ads Manager.\n- Alert System (V6.5)"
+    body += "---\nPlease review your Ads Manager.\n- Alert System (V6.6)"
     return subject, body
 
 
@@ -482,7 +487,7 @@ def send_email(subject, body):
 
 
 def main():
-    print(f"Starting Campaign Alert Script (v6.5 - Precise Audit) at {datetime.datetime.now()}")
+    print(f"Starting Campaign Alert Script (v6.6 - optimized audit) at {datetime.datetime.now()}")
     client = get_sheets_client()
     result = fetch_spreadsheet_data(client)
     if result is None: return
