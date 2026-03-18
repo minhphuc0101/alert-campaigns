@@ -161,7 +161,7 @@ def fetch_meta_automated_rules(access_token, ad_account_ids):
             
             try:
                 account = AdAccount(full_id)
-                rules = account.get_ads_api_rules(fields=['name', 'status', 'evaluation_spec', 'execution_spec'])
+                rules = account.get_ad_rules_library(fields=['name', 'status', 'evaluation_spec', 'execution_spec'])
                 
                 target_campaign_ids = set()
                 for rule in rules:
