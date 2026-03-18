@@ -176,14 +176,14 @@ def fetch_meta_automated_rules(access_token, ad_account_ids):
                 except:
                     pass # Continue with Sheet IDs if lookup fails
 
-                # 2. Fetch and count Rules across ALL pages (Fixing the 'Found 25' bug)
+                # 2. Fetch and count Rules across ALL pages
                 rules_cursor = account.get_ad_rules_library(fields=['name', 'status', 'evaluation_spec', 'execution_spec'])
                 
                 target_campaign_ids = set()
                 rule_count = 0
                 enabled_count = 0
                 
-                for rule in rules_cursor: # Facebook SDK handles paging automatically as we iterate
+                for rule in rules_cursor: # SDK handles paging automatically
                     rule_count += 1
                     if rule.get('status') != 'ENABLED': continue
                     enabled_count += 1
@@ -196,7 +196,7 @@ def fetch_meta_automated_rules(access_token, ad_account_ids):
                             if not isinstance(vals, list): vals = [vals]
                             target_campaign_ids.update([str(v) for v in vals])
                 
-                print(f"DEBUG: Scanned {rule_count} total rules ({enabled_count} Enabled). Found {len(target_campaign_ids)} unique protected Campaign IDs.")
+                print(f"DEBUG: Found {rule_count} rules ({enabled_count} Enabled). Audit covered {len(target_campaign_ids)} unique Campaign IDs.")
                 rules_by_account[full_id] = {
                     'protected_ids': target_campaign_ids,
                     'meta_map': name_to_id_map
@@ -383,13 +383,12 @@ def analyze_data(df, date_col, status_col, metric_map, ad_account_col, ad_accoun
                         # Fallback to Auto-Lookup if sheet ID is missing
                         if not final_camp_id and campaign in meta_map:
                             final_camp_id = meta_map[campaign]
-                            print(f"DEBUG: Mapping Found! '{campaign}' matched to Campaign ID {final_camp_id}")
                         
                         is_covered = final_camp_id and final_camp_id in protected_ids
                         
                         if not is_covered:
                              msg = "No active 'Pause' rule found for this campaign ID"
-                             if not final_camp_id: msg = "Cannot Audit: Campaign ID missing (even after lookup)"
+                             if not final_camp_id: msg = "Cannot Audit: ID missing in sheet & lookup failed"
                              
                              missing_automation_alerts.append({
                                 'campaign': campaign,
@@ -426,7 +425,7 @@ def format_email(alert_groups):
     if not has_alerts and not alert_groups.get('audit_error'):
         return None, "Spending is within normal parameters and no action is required today."
         
-    subject = f"🚨 Action Required: Campaign Alert [V7.7 - PLAIN TEXT SYNC] - {datetime.datetime.now().strftime('%Y-%m-%d')}"
+    subject = f"🚨 Action Required: Campaign Alert [V7.8 - FINAL] - {datetime.datetime.now().strftime('%Y-%m-%d')}"
     body = "Hi Team,\n\nThe following campaigns require attention based on their performance and spending patterns:\n\n"
     
     if alert_groups.get('audit_error'):
@@ -466,7 +465,7 @@ def format_email(alert_groups):
             body += f"{i}. {alert['campaign']}, {alert['acc_name']}\n"
         body += "\n"
             
-    body += "---\nPlease review your Ads Manager.\n- Alert System (V7.7)"
+    body += "---\nPlease review your Ads Manager.\n- Alert System (V7.8)"
     return subject, body
 
 
@@ -490,7 +489,7 @@ def send_email(subject, body):
 
 
 def main():
-    print(f"Starting Campaign Alert Script (v7.7 - plain text sync) at {datetime.datetime.now()}")
+    print(f"Starting Campaign Alert Script (v7.8 - final) at {datetime.datetime.now()}")
     client = get_sheets_client()
     result = fetch_spreadsheet_data(client)
     if result is None: return

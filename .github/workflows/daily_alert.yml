@@ -2,8 +2,8 @@ name: Daily Campaign Spend Alert
 
 on:
   schedule:
-    # Runs at 01:00 UTC every day (which is 08:00 AM in UTC+7 / Vietnam Time)
-    - cron: '0 1 * * *'
+    # Runs at 23:00 UTC every day (which is 06:00 AM UTC+7 / Vietnam Time next day)
+    - cron: '0 23 * * *'
   # Allows you to trigger the run manually from the GitHub Actions tab
   workflow_dispatch:
 
