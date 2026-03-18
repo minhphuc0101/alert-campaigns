@@ -78,6 +78,13 @@ def fetch_spreadsheet_data(client):
     status_keywords = ['status', 'state']
     status_col = next((col for col in df.columns if any(kw in col for kw in status_keywords)), None)
     
+    # Clean numeric columns to prevent TypeError during summation
+    metric_cols = ['amount spent', 'post engagement', 'impressions', 'reach', '3-second video views']
+    for col in metric_cols:
+        if col in df.columns:
+            # Convert to string, remove commas, and convert to numeric (float), filling errors with 0
+            df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+    
     return df, date_col, status_col
 
 
