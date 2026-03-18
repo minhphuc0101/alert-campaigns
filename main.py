@@ -214,12 +214,12 @@ def format_email(alerts):
     if not alerts:
         return None, "Spending is within normal parameters and no action is required today."
         
-    subject = f"🚨 Action Required: Campaign Alert - {datetime.datetime.now().strftime('%Y-%m-%d')}"
+    subject = f"🚨 Action Required: Campaign Alert [V5.0 - VOLUME ONLY] - {datetime.datetime.now().strftime('%Y-%m-%d')}"
     body = "Hi Team,\n\nThe following campaigns are currently exceeding their target KPIs or spending anomalies have been detected:\n\n"
     
     for i, alert in enumerate(alerts, 1):
         body += f"{i}. {alert['campaign']}\n"
-        body += f"   - 📉 Issue: {alert['issue']}\n"
+        body += f"   - ❗ Issue: {alert['issue']}\n"
         body += f"   - 💰 Spent: {alert['spent_line']}\n"
         body += f"   - 📊 Metrics: {alert['metrics']}\n"
         body += f"   - 🚦 Campaign Status: {alert['status']}\n\n"
