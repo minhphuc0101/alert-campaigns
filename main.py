@@ -11,6 +11,7 @@ from google.oauth2.service_account import Credentials
 from dotenv import load_dotenv
 from facebook_business.api import FacebookAdsApi
 from facebook_business.adobjects.adaccount import AdAccount
+from facebook_business.adobjects.campaign import Campaign
 
 # Load environment variables
 load_dotenv()
@@ -148,19 +149,27 @@ def fetch_meta_automated_rules(access_token, ad_account_ids):
         return {}, "Meta Access Token (FB_ACCESS_TOKEN) is not set."
 
     rules_by_account = {}
+    campaign_id_map = {} # {account_id: {name: id}}
     error_msg = None
     try:
         FacebookAdsApi.init(access_token=access_token)
         for account_id in ad_account_ids:
-            # Flatten if it's a numpy array or single value
             acc_id_str = str(account_id).strip()
             if not acc_id_str or acc_id_str == 'nan' or acc_id_str == 'None': continue
             
             full_id = acc_id_str if acc_id_str.startswith('act_') else f"act_{acc_id_str}"
-            print(f"Fetching Meta rules for account: {full_id}...")
+            print(f"Fetching Meta data for account: {full_id}...")
             
             try:
                 account = AdAccount(full_id)
+                
+                # 1. Fetch Campaign Name -> ID mapping (V6.3 Refinement)
+                # This helps audit campaigns even if the user didn't put the ID in the sheet
+                camps = account.get_campaigns(fields=['name', 'id'], params={'filtering': [{'field': 'effective_status', 'operator': 'IN', 'value': ['ACTIVE', 'PAUSED']}]})
+                name_to_id = {c['name']: c['id'] for c in camps}
+                campaign_id_map[full_id] = name_to_id
+                
+                # 2. Fetch Automated Rules
                 rules = account.get_ad_rules_library(fields=['name', 'status', 'evaluation_spec', 'execution_spec'])
                 
                 target_campaign_ids = set()
@@ -183,14 +192,14 @@ def fetch_meta_automated_rules(access_token, ad_account_ids):
                 
                 rules_by_account[full_id] = target_campaign_ids
             except Exception as e:
-                print(f"Error fetching rules for {full_id}: {e}")
+                print(f"Error fetching data for {full_id}: {e}")
                 rules_by_account[full_id] = f"Error: {str(e)}"
             
     except Exception as e:
         error_msg = f"Meta API Connection Error: {str(e)}"
         print(error_msg)
     
-    return rules_by_account, error_msg
+    return rules_by_account, campaign_id_map, error_msg
 
 
 def analyze_data(df, date_col, status_col, metric_map, ad_account_col, campaign_id_col):
@@ -220,7 +229,7 @@ def analyze_data(df, date_col, status_col, metric_map, ad_account_col, campaign_
     if len(unique_account_ids) == 0 and FB_AD_ACCOUNT_ID:
         unique_account_ids = [FB_AD_ACCOUNT_ID]
         
-    meta_rules, meta_error = fetch_meta_automated_rules(FB_ACCESS_TOKEN, [str(i) for i in unique_account_ids])
+    meta_rules, campaign_id_map, meta_error = fetch_meta_automated_rules(FB_ACCESS_TOKEN, [str(i) for i in unique_account_ids])
     
     missing_automation_alerts = []
     skipped_audit_reason = meta_error
@@ -342,18 +351,23 @@ def analyze_data(df, date_col, status_col, metric_map, ad_account_col, campaign_
                             'reason': "Missing Meta Automation"
                         })
                     else:
+                        # V6.3: Automatic ID Lookup from fetched map if sheet ID is missing
+                        final_camp_id = camp_id
+                        acc_id_lookup = campaign_id_map.get(full_acc_id, {})
+                        if not final_camp_id and campaign in acc_id_lookup:
+                            final_camp_id = acc_id_lookup[campaign]
+                            print(f"Found ID {final_camp_id} for campaign '{campaign}' via Meta lookup.")
+
                         is_covered = False
-                        if camp_id and str(camp_id) in rules_data:
+                        if final_camp_id and str(final_camp_id) in rules_data:
                             is_covered = True
-                        elif not camp_id and len(rules_data) > 0:
-                            is_covered = True 
                         
                         if not is_covered:
                              missing_automation_alerts.append({
                                 'campaign': campaign,
                                 'status': status,
                                 'issue': f"No active 'Pause' rule found for this campaign ID in Meta",
-                                'spent_line': f"(Campaign ID: {camp_id if camp_id else 'Missing in Sheet'})",
+                                'spent_line': f"(Campaign ID: {final_camp_id if final_camp_id else 'Not found/Missing'})",
                                 'metrics': "High Risk: If target hit, script will alert but won't STOP in Meta!",
                                 'reason': "Missing Meta Automation"
                             })
@@ -386,7 +400,7 @@ def format_email(alert_groups):
     if not has_alerts and not alert_groups.get('audit_error'):
         return None, "Spending is within normal parameters and no action is required today."
         
-    subject = f"🚨 Action Required: Campaign Alert [V6.2 - AUDIT STATUS] - {datetime.datetime.now().strftime('%Y-%m-%d')}"
+    subject = f"🚨 Action Required: Campaign Alert [V6.3 - AUTO-LOOKUP] - {datetime.datetime.now().strftime('%Y-%m-%d')}"
     body = "Hi Team,\n\nThe following campaigns require attention based on their performance and spending patterns:\n\n"
     
     if alert_groups.get('audit_error'):
@@ -428,7 +442,7 @@ def format_email(alert_groups):
             body += f"   - 💰 Detail: {alert['spent_line']}\n"
             body += f"   - 🚦 Campaign Status: {alert['status']}\n\n"
             
-    body += "---\nPlease review your Ads Manager.\n- Alert System (V6.2)"
+    body += "---\nPlease review your Ads Manager.\n- Alert System (V6.3)"
     return subject, body
 
 
@@ -452,7 +466,7 @@ def send_email(subject, body):
 
 
 def main():
-    print(f"Starting Campaign Alert Script (v6.2 - Audit transparency) at {datetime.datetime.now()}")
+    print(f"Starting Campaign Alert Script (v6.3 - Automatic ID Lookup) at {datetime.datetime.now()}")
     client = get_sheets_client()
     result = fetch_spreadsheet_data(client)
     if result is None: return
