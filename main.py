@@ -203,8 +203,8 @@ def analyze_data(df, date_col, status_col, metric_map, ad_account_col, campaign_
     """Performs mathematical analysis for alerts."""
     alerts = []
     
-    # Exclude App Installs and Leads (use regex for better matching)
-    df = df[~df['campaign name'].str.contains('app install|lead', case=False, na=False)]
+    # Exclude App Installs, Leads, and Messenger (V7.0)
+    df = df[~df['campaign name'].str.contains('app install|lead|messenger', case=False, na=False)]
     
     campaigns = df['campaign name'].unique()
     available_dates = df[date_col].drop_duplicates().sort_values(ascending=False).tolist()
@@ -410,7 +410,7 @@ def format_email(alert_groups):
     if not has_alerts and not alert_groups.get('audit_error'):
         return None, "Spending is within normal parameters and no action is required today."
         
-    subject = f"🚨 Action Required: Campaign Alert [V6.9 - ID FIX] - {datetime.datetime.now().strftime('%Y-%m-%d')}"
+    subject = f"🚨 Action Required: Campaign Alert [V7.0 - EXCLUSION REFINED] - {datetime.datetime.now().strftime('%Y-%m-%d')}"
     body = "Hi Team,\n\nThe following campaigns require attention based on their performance and spending patterns:\n\n"
     
     if alert_groups.get('audit_error'):
@@ -452,7 +452,7 @@ def format_email(alert_groups):
             body += f"   - 💰 Detail: {alert['spent_line']}\n"
             body += f"   - 🚦 Campaign Status: {alert['status']}\n\n"
             
-    body += "---\nPlease review your Ads Manager.\n- Alert System (V6.9)"
+    body += "---\nPlease review your Ads Manager.\n- Alert System (V7.0)"
     return subject, body
 
 
@@ -476,7 +476,7 @@ def send_email(subject, body):
 
 
 def main():
-    print(f"Starting Campaign Alert Script (v6.9 - ID conversion fix) at {datetime.datetime.now()}")
+    print(f"Starting Campaign Alert Script (v7.0 - messenger/lead exclusions) at {datetime.datetime.now()}")
     client = get_sheets_client()
     result = fetch_spreadsheet_data(client)
     if result is None: return
