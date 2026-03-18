@@ -84,6 +84,7 @@ def fetch_spreadsheet_data(client):
     date_col = find_col(['date', 'day'])
     status_col = find_col(['status', 'state'])
     ad_account_col = find_col(['ad account id', 'account id', 'account_id'])
+    ad_account_name_col = find_col(['ad account name', 'account name', 'account_name'])
     campaign_id_col = find_col(['campaign id', 'id', 'campaign_id', 'cp id', 'meta id'])
     
     # Metrics Mapping
@@ -113,12 +114,13 @@ def fetch_spreadsheet_data(client):
     print(f"Date: {date_col}")
     print(f"Status: {status_col}")
     print(f"Ad Account ID Map: {ad_account_col}")
+    print(f"Ad Account Name Map: {ad_account_name_col}")
     print(f"Campaign ID Map: {campaign_id_col}")
     for k, v in metric_map.items():
         print(f"{k.capitalize()}: {v}")
     print(f"-----------------------------")
     
-    return df, date_col, status_col, metric_map, ad_account_col, campaign_id_col
+    return df, date_col, status_col, metric_map, ad_account_col, ad_account_name_col, campaign_id_col
 
 
 def extract_kpi_target(campaign_name):
@@ -199,7 +201,7 @@ def fetch_meta_automated_rules(access_token, ad_account_ids):
     return rules_by_account, error_msg
 
 
-def analyze_data(df, date_col, status_col, metric_map, ad_account_col, campaign_id_col):
+def analyze_data(df, date_col, status_col, metric_map, ad_account_col, ad_account_name_col, campaign_id_col):
     """Performs mathematical analysis for alerts."""
     alerts = []
     
@@ -319,10 +321,11 @@ def analyze_data(df, date_col, status_col, metric_map, ad_account_col, campaign_
                         'reason': "High spend anomaly"
                     })
 
-        # 3. Meta Automation Rule Audit (V6.9)
+        # 3. Meta Automation Rule Audit (V7.1)
         if status == 'active':
-            # Get account ID from sheet, or fallback to environment variable
+            # Get account IDs and name from sheet
             sheet_acc_id = str(latest_row.get(ad_account_col, '')).strip() if ad_account_col else ''
+            acc_name = str(latest_row.get(ad_account_name_col, 'Unknown Account')).strip() if ad_account_name_col else 'Unknown Account'
             
             # Clean ID (strip .0 if it was converted to float)
             if sheet_acc_id.endswith('.0'):
@@ -375,10 +378,8 @@ def analyze_data(df, date_col, status_col, metric_map, ad_account_col, campaign_
 
                              missing_automation_alerts.append({
                                 'campaign': campaign,
-                                'status': status,
+                                'acc_name': acc_name,
                                 'issue': issue_msg,
-                                'spent_line': f"{detail_row} (Account: {full_acc_id})",
-                                'metrics': "Safety Status: UNPROTECTED",
                                 'reason': "Missing Meta Automation"
                             })
                 else:
@@ -410,7 +411,7 @@ def format_email(alert_groups):
     if not has_alerts and not alert_groups.get('audit_error'):
         return None, "Spending is within normal parameters and no action is required today."
         
-    subject = f"🚨 Action Required: Campaign Alert [V7.0 - EXCLUSION REFINED] - {datetime.datetime.now().strftime('%Y-%m-%d')}"
+    subject = f"🚨 Action Required: Campaign Alert [V7.1 - REPORT REFINED] - {datetime.datetime.now().strftime('%Y-%m-%d')}"
     body = "Hi Team,\n\nThe following campaigns require attention based on their performance and spending patterns:\n\n"
     
     if alert_groups.get('audit_error'):
@@ -441,18 +442,16 @@ def format_email(alert_groups):
             body += f"   - 📊 Metrics: {alert['metrics']}\n"
             body += f"   - 🚦 Campaign Status: {alert['status']}\n\n"
 
-    # Section 3: Missing Automation
+    # Section 3: Missing Automation (Concise V7.1)
     if alert_groups['missing_automation']:
         body += "🛡️ SECTION 3: MISSING AUTOMATION RULES (Meta)\n"
         body += "========================================\n"
-        body += "The following campaigns are ACTIVE but have no automated 'Pause' rules in Meta. If they hit their KPI, they won't stop automatically!\n\n"
+        body += "The following campaigns are ACTIVE but have no automated 'Pause' rules found in Meta:\n\n"
         for i, alert in enumerate(alert_groups['missing_automation'], 1):
-            body += f"{i}. {alert['campaign']}\n"
-            body += f"   - ❗ Issue: {alert['issue']}\n"
-            body += f"   - 💰 Detail: {alert['spent_line']}\n"
-            body += f"   - 🚦 Campaign Status: {alert['status']}\n\n"
+            body += f"{i}. {alert['campaign']}, {alert['acc_name']}\n"
+        body += "\n"
             
-    body += "---\nPlease review your Ads Manager.\n- Alert System (V7.0)"
+    body += "---\nPlease review your Ads Manager.\n- Alert System (V7.1)"
     return subject, body
 
 
@@ -476,13 +475,13 @@ def send_email(subject, body):
 
 
 def main():
-    print(f"Starting Campaign Alert Script (v7.0 - messenger/lead exclusions) at {datetime.datetime.now()}")
+    print(f"Starting Campaign Alert Script (v7.1 - concise reporting) at {datetime.datetime.now()}")
     client = get_sheets_client()
     result = fetch_spreadsheet_data(client)
     if result is None: return
     
-    df, date_col, status_col, metric_map, ad_account_col, campaign_id_col = result
-    alert_groups = analyze_data(df, date_col, status_col, metric_map, ad_account_col, campaign_id_col)
+    df, date_col, status_col, metric_map, ad_account_col, ad_account_name_col, campaign_id_col = result
+    alert_groups = analyze_data(df, date_col, status_col, metric_map, ad_account_col, ad_account_name_col, campaign_id_col)
     
     subject, body = format_email(alert_groups)
     if subject:
