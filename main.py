@@ -11,7 +11,6 @@ from google.oauth2.service_account import Credentials
 from dotenv import load_dotenv
 from facebook_business.api import FacebookAdsApi
 from facebook_business.adobjects.adaccount import AdAccount
-from facebook_business.adobjects.adsapiurule import AdsApiRule
 
 # Load environment variables
 load_dotenv()
