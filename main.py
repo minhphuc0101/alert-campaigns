@@ -235,7 +235,7 @@ def analyze_data(df, date_col, status_col, metric_map):
             yesterday_spend = yesterday_data[spent_col].sum() if spent_col else 0
             avg_prior_spend = prior_data[spent_col].sum() / len(prior_3_dates) if spent_col else 0
             
-            if avg_prior_spend > 0:
+            if avg_prior_spend >= 1000000: # NEW V5.3: Only alert if 3-day avg spend >= 1M
                 percent_increase = (yesterday_spend - avg_prior_spend) / avg_prior_spend
                 if percent_increase > 0.30: # 30% jump
                     alerts.append({
@@ -262,7 +262,7 @@ def format_email(alert_groups):
     if not has_alerts:
         return None, "Spending is within normal parameters and no action is required today."
         
-    subject = f"🚨 Action Required: Campaign Alert [V5.2 - SECTIONED REPORT] - {datetime.datetime.now().strftime('%Y-%m-%d')}"
+    subject = f"🚨 Action Required: Campaign Alert [V5.3 - REFINED ANOMALY FILTER] - {datetime.datetime.now().strftime('%Y-%m-%d')}"
     body = "Hi Team,\n\nThe following campaigns require attention based on their performance and spending patterns:\n\n"
     
     # Section 1: KPI Achievement
@@ -287,7 +287,7 @@ def format_email(alert_groups):
             body += f"   - 📊 Metrics: {alert['metrics']}\n"
             body += f"   - 🚦 Campaign Status: {alert['status']}\n\n"
             
-    body += "---\nPlease review your Ads Manager.\n- Alert System (V5.2)"
+    body += "---\nPlease review your Ads Manager.\n- Alert System (V5.3)"
     return subject, body
 
 
@@ -311,7 +311,7 @@ def send_email(subject, body):
 
 
 def main():
-    print(f"Starting Campaign Alert Script (v5.2 - Refined Logic) at {datetime.datetime.now()}")
+    print(f"Starting Campaign Alert Script (v5.3 - Refined Anomaly Filter) at {datetime.datetime.now()}")
     client = get_sheets_client()
     result = fetch_spreadsheet_data(client)
     if result is None: return
