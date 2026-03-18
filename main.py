@@ -145,50 +145,52 @@ def extract_kpi_target(campaign_name):
 def fetch_meta_automated_rules(access_token, ad_account_ids):
     """Fetches all automated rules for the given account IDs from Meta API."""
     if not access_token:
-        print("Warning: FB_ACCESS_TOKEN not set. Skipping Meta rule check.")
-        return {}
+        return {}, "Meta Access Token (FB_ACCESS_TOKEN) is not set."
 
     rules_by_account = {}
+    error_msg = None
     try:
         FacebookAdsApi.init(access_token=access_token)
         for account_id in ad_account_ids:
-            if not account_id or account_id == 'nan': continue
+            # Flatten if it's a numpy array or single value
+            acc_id_str = str(account_id).strip()
+            if not acc_id_str or acc_id_str == 'nan' or acc_id_str == 'None': continue
             
-            # Ensure 'act_' prefix
-            full_id = account_id if account_id.startswith('act_') else f"act_{account_id}"
+            full_id = acc_id_str if acc_id_str.startswith('act_') else f"act_{acc_id_str}"
             print(f"Fetching Meta rules for account: {full_id}...")
             
-            account = AdAccount(full_id)
-            # Fetch rules with active pause actions
-            rules = account.get_ads_api_rules(fields=['name', 'status', 'evaluation_spec', 'execution_spec'])
-            
-            # Extract target campaign IDs from active rules
-            target_campaign_ids = set()
-            for rule in rules:
-                if rule.get('status') != 'ENABLED': continue
+            try:
+                account = AdAccount(full_id)
+                rules = account.get_ads_api_rules(fields=['name', 'status', 'evaluation_spec', 'execution_spec'])
                 
-                # Check for pause/turn off actions
-                exec_spec = rule.get('execution_spec', {})
-                if exec_spec.get('execution_type') not in ['PAUSE', 'TURN_OFF_CAMPAIGN', 'TURN_OFF_ADGROUP']:
-                    continue
+                target_campaign_ids = set()
+                for rule in rules:
+                    if rule.get('status') != 'ENABLED': continue
+                    
+                    exec_spec = rule.get('execution_spec', {})
+                    if exec_spec.get('execution_type') not in ['PAUSE', 'TURN_OFF_CAMPAIGN', 'TURN_OFF_ADGROUP']:
+                        continue
+                    
+                    eval_spec = rule.get('evaluation_spec', {})
+                    filters = eval_spec.get('filters', [])
+                    for f in filters:
+                        if f.get('field') == 'campaign.id':
+                            vals = f.get('value')
+                            if isinstance(vals, list):
+                                target_campaign_ids.update([str(v) for v in vals])
+                            else:
+                                target_campaign_ids.add(str(vals))
                 
-                # Check filters for campaign IDs
-                eval_spec = rule.get('evaluation_spec', {})
-                filters = eval_spec.get('filters', [])
-                for f in filters:
-                    if f.get('field') == 'campaign.id':
-                        vals = f.get('value')
-                        if isinstance(vals, list):
-                            target_campaign_ids.update([str(v) for v in vals])
-                        else:
-                            target_campaign_ids.add(str(vals))
-            
-            rules_by_account[full_id] = target_campaign_ids
+                rules_by_account[full_id] = target_campaign_ids
+            except Exception as e:
+                print(f"Error fetching rules for {full_id}: {e}")
+                rules_by_account[full_id] = f"Error: {str(e)}"
             
     except Exception as e:
-        print(f"Error fetching Meta rules: {e}")
+        error_msg = f"Meta API Connection Error: {str(e)}"
+        print(error_msg)
     
-    return rules_by_account
+    return rules_by_account, error_msg
 
 
 def analyze_data(df, date_col, status_col, metric_map, ad_account_col, campaign_id_col):
@@ -213,14 +215,15 @@ def analyze_data(df, date_col, status_col, metric_map, ad_account_col, campaign_
     reach_col = metric_map['reach']
     views_col = metric_map['video_views']
 
-    # Meta Automation Check (V6.0)
+    # Meta Automation Check (V6.2)
     unique_account_ids = df[ad_account_col].dropna().unique() if ad_account_col else []
     if len(unique_account_ids) == 0 and FB_AD_ACCOUNT_ID:
         unique_account_ids = [FB_AD_ACCOUNT_ID]
         
-    meta_rules = fetch_meta_automated_rules(FB_ACCESS_TOKEN, [str(i) for i in unique_account_ids])
+    meta_rules, meta_error = fetch_meta_automated_rules(FB_ACCESS_TOKEN, [str(i) for i in unique_account_ids])
     
     missing_automation_alerts = []
+    skipped_audit_reason = meta_error
 
     for campaign in campaigns:
         campaign_df = df[df['campaign name'] == campaign]
@@ -310,31 +313,59 @@ def analyze_data(df, date_col, status_col, metric_map, ad_account_col, campaign_
                         'reason': "High spend anomaly"
                     })
 
-        # 3. Meta Automation Rule Audit (V6.0)
+        # 3. Meta Automation Rule Audit (V6.2)
         if status == 'active':
             acc_id = str(latest_row.get(ad_account_col, '')) if ad_account_col else FB_AD_ACCOUNT_ID
             camp_id = str(latest_row.get(campaign_id_col, '')) if campaign_id_col else ''
             
-            if acc_id:
-                full_acc_id = acc_id if acc_id.startswith('act_') else f"act_{acc_id}"
+            acc_id_str = str(acc_id).strip()
+            if not acc_id_str or acc_id_str == 'nan' or acc_id_str == 'None':
+                missing_automation_alerts.append({
+                    'campaign': campaign,
+                    'status': status,
+                    'issue': "Missing Ad Account ID in spreadsheet",
+                    'spent_line': "Cannot check rules without Account ID",
+                    'metrics': "High Risk",
+                    'reason': "Missing Meta Automation"
+                })
+            else:
+                full_acc_id = acc_id_str if acc_id_str.startswith('act_') else f"act_{acc_id_str}"
                 if full_acc_id in meta_rules:
-                    # Logic:
-                    # If we have a Campaign ID, check if it's in the rule list
-                    # If we DON'T have a Campaign ID, we can only check if the account has ANY rules (less accurate)
-                    is_covered = False
-                    if camp_id and camp_id in meta_rules[full_acc_id]:
-                        is_covered = True
-                    elif not camp_id and len(meta_rules[full_acc_id]) > 0:
-                        # Account has rules, but we can't be sure about this campaign
-                        is_covered = True # Be optimistic but maybe warn?
-                    
-                    if not is_covered:
-                         missing_automation_alerts.append({
+                    rules_data = meta_rules[full_acc_id]
+                    if isinstance(rules_data, str) and rules_data.startswith('Error:'):
+                        missing_automation_alerts.append({
                             'campaign': campaign,
                             'status': status,
-                            'issue': f"No active 'Pause' rule found for this campaign in Meta Account {full_acc_id}",
-                            'spent_line': f"(Campaign ID: {camp_id if camp_id else 'Missing in Sheet'})",
-                            'metrics': "High Risk: Script will alert but campaign won't stop in Meta!",
+                            'issue': f"API Audit Failed: {rules_data}",
+                            'spent_line': f"Account: {full_acc_id}",
+                            'metrics': "Audit Skipped due to API error",
+                            'reason': "Missing Meta Automation"
+                        })
+                    else:
+                        is_covered = False
+                        if camp_id and str(camp_id) in rules_data:
+                            is_covered = True
+                        elif not camp_id and len(rules_data) > 0:
+                            is_covered = True 
+                        
+                        if not is_covered:
+                             missing_automation_alerts.append({
+                                'campaign': campaign,
+                                'status': status,
+                                'issue': f"No active 'Pause' rule found for this campaign ID in Meta",
+                                'spent_line': f"(Campaign ID: {camp_id if camp_id else 'Missing in Sheet'})",
+                                'metrics': "High Risk: If target hit, script will alert but won't STOP in Meta!",
+                                'reason': "Missing Meta Automation"
+                            })
+                else:
+                    # Not in meta_rules but we had a token? maybe skip reason was missed
+                    if not meta_error:
+                        missing_automation_alerts.append({
+                            'campaign': campaign,
+                            'status': status,
+                            'issue': "Audit skipped (Could not connect to this Ad Account)",
+                            'spent_line': f"Account: {full_acc_id}",
+                            'metrics': "Check your FB_ACCESS_TOKEN permissions",
                             'reason': "Missing Meta Automation"
                         })
 
@@ -345,20 +376,24 @@ def analyze_data(df, date_col, status_col, metric_map, ad_account_col, campaign_
     return {
         'kpi': kpi_alerts,
         'anomaly': anomaly_alerts,
-        'missing_automation': missing_automation_alerts
+        'missing_automation': missing_automation_alerts,
+        'audit_error': skipped_audit_reason
     }
 
 
 def format_email(alert_groups):
-    has_alerts = any(alert_groups.values())
-    if not has_alerts:
+    has_alerts = any(k != 'audit_error' and v for k, v in alert_groups.items())
+    if not has_alerts and not alert_groups.get('audit_error'):
         return None, "Spending is within normal parameters and no action is required today."
         
-    subject = f"🚨 Action Required: Campaign Alert [V6.1 - AUTOMATION AUDIT] - {datetime.datetime.now().strftime('%Y-%m-%d')}"
+    subject = f"🚨 Action Required: Campaign Alert [V6.2 - AUDIT STATUS] - {datetime.datetime.now().strftime('%Y-%m-%d')}"
     body = "Hi Team,\n\nThe following campaigns require attention based on their performance and spending patterns:\n\n"
     
-    if alert_groups['missing_automation']:
-        body += "⚠️ WARNING: Some active campaigns are missing Meta Automated Rules. See Section 3 for details.\n\n"
+    if alert_groups.get('audit_error'):
+        body += f"⚠️ META AUDIT SKIPPED: {alert_groups['audit_error']}\n"
+        body += "Please check your FB_ACCESS_TOKEN and Ad Account IDs.\n\n"
+    elif alert_groups['missing_automation']:
+        body += "🚨 CRITICAL: Some active campaigns are missing Meta Automated Rules. They will NOT stop automatically!\n\n"
     
     # Section 1: KPI Achievement
     if alert_groups['kpi']:
@@ -393,7 +428,7 @@ def format_email(alert_groups):
             body += f"   - 💰 Detail: {alert['spent_line']}\n"
             body += f"   - 🚦 Campaign Status: {alert['status']}\n\n"
             
-    body += "---\nPlease review your Ads Manager.\n- Alert System (V6.1)"
+    body += "---\nPlease review your Ads Manager.\n- Alert System (V6.2)"
     return subject, body
 
 
@@ -417,7 +452,7 @@ def send_email(subject, body):
 
 
 def main():
-    print(f"Starting Campaign Alert Script (v6.0 - Automation Auditor) at {datetime.datetime.now()}")
+    print(f"Starting Campaign Alert Script (v6.2 - Audit transparency) at {datetime.datetime.now()}")
     client = get_sheets_client()
     result = fetch_spreadsheet_data(client)
     if result is None: return
