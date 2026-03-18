@@ -57,35 +57,63 @@ def fetch_spreadsheet_data(client):
         print("The sheet is empty.")
         return None
 
-    # Standardize column names
-    df.columns = [str(c).strip().lower() for c in df.columns]
+    # 1. Standardize and Deduplicate Column Names
+    raw_columns = [str(c).strip().lower() for c in df.columns]
+    new_columns = []
+    seen = {}
+    for col in raw_columns:
+        if col in seen:
+            seen[col] += 1
+            new_columns.append(f"{col}_{seen[col]}")
+        else:
+            seen[col] = 0
+            new_columns.append(col)
+    df.columns = new_columns
 
-    # Find the date column
-    date_keywords = ['date', 'day']
-    date_col = next((col for col in df.columns if any(kw in col for kw in date_keywords)), None)
-            
-    if not date_col:
-        print(f"Error: Could not find a date column. Headers: {df.columns.tolist()}")
+    # 2. Find Best Matching Columns via Keywords
+    def find_col(keywords):
+        for col in df.columns:
+            if any(kw in col for kw in keywords):
+                return col
         return None
 
-    # Convert to datetime
+    date_col = find_col(['date', 'day'])
+    status_col = find_col(['status', 'state'])
+    
+    # Metrics Mapping
+    metric_map = {
+        'spent': find_col(['amount spent', 'spent', 'cost']),
+        'engagement': find_col(['post engagement', 'engagement', 'interaction']),
+        'impressions': find_col(['impressions']),
+        'reach': find_col(['reach']),
+        'video_views': find_col(['3-second video views', 'video views', 'views'])
+    }
+            
+    if not date_col or not metric_map['spent']:
+        print(f"Error: Could not find required columns (Date/Spent). Headers: {df.columns.tolist()}")
+        return None
+
+    # 3. Aggressive Metric Cleaning (Convert to numeric, handle commas/strings)
+    for key, col in metric_map.items():
+        if col:
+            # Remove commas and convert to numeric; invalid entries become NaN then 0
+            df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+
+    # Convert Date to datetime
     df[date_col] = pd.to_datetime(df[date_col], format='mixed', dayfirst=False)
     
-    # Sort by date
+    # Sort by date (latest first)
     df = df.sort_values(by=date_col, ascending=False)
     
-    # Find the status column
-    status_keywords = ['status', 'state']
-    status_col = next((col for col in df.columns if any(kw in col for kw in status_keywords)), None)
+    # Print mappings for debugging
+    print(f"--- Column Mappings [V5.1] ---")
+    print(f"Date: {date_col}")
+    print(f"Status: {status_col}")
+    for k, v in metric_map.items():
+        print(f"{k.capitalize()}: {v}")
+    print(f"-----------------------------")
     
-    # Clean numeric columns to prevent TypeError during summation
-    metric_cols = ['amount spent', 'post engagement', 'impressions', 'reach', '3-second video views']
-    for col in metric_cols:
-        if col in df.columns:
-            # Convert to string, remove commas, and convert to numeric (float), filling errors with 0
-            df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
-    
-    return df, date_col, status_col
+    return df, date_col, status_col, metric_map
 
 
 def extract_kpi_target(campaign_name):
@@ -109,7 +137,7 @@ def extract_kpi_target(campaign_name):
     return None, None
 
 
-def analyze_data(df, date_col, status_col):
+def analyze_data(df, date_col, status_col, metric_map):
     """Performs mathematical analysis for alerts."""
     alerts = []
     
@@ -124,6 +152,13 @@ def analyze_data(df, date_col, status_col):
     latest_date = available_dates[0]
     prior_3_dates = available_dates[1:4]
     
+    # Primary metrics from mapping
+    spent_col = metric_map['spent']
+    eng_col = metric_map['engagement']
+    imp_col = metric_map['impressions']
+    reach_col = metric_map['reach']
+    views_col = metric_map['video_views']
+
     for campaign in campaigns:
         campaign_df = df[df['campaign name'] == campaign]
         latest_row = campaign_df.iloc[0]
@@ -136,11 +171,12 @@ def analyze_data(df, date_col, status_col):
         
         status = status.lower() if isinstance(status, str) else 'unknown'
         
-        total_spent = campaign_df['amount spent'].sum()
-        total_engagement = campaign_df['post engagement'].sum()
-        total_impressions = campaign_df['impressions'].sum()
-        total_reach = campaign_df['reach'].sum()
-        total_video_views = campaign_df.get('3-second video views', pd.Series([0])).sum()
+        # Calculate sums (Metrics are already cleaned to numeric in fetch)
+        total_spent = campaign_df[spent_col].sum() if spent_col else 0
+        total_engagement = campaign_df[eng_col].sum() if eng_col else 0
+        total_impressions = campaign_df[imp_col].sum() if imp_col else 0
+        total_reach = campaign_df[reach_col].sum() if reach_col else 0
+        total_video_views = campaign_df[views_col].sum() if views_col else 0
         
         # 1. Lifetime Volume KPI Check
         kpi_type, kpi_target = extract_kpi_target(campaign)
@@ -191,8 +227,8 @@ def analyze_data(df, date_col, status_col):
         prior_data = campaign_df[campaign_df[date_col].isin(prior_3_dates)]
         
         if not yesterday_data.empty and not prior_data.empty:
-            yesterday_spend = yesterday_data['amount spent'].sum()
-            avg_prior_spend = prior_data['amount spent'].sum() / len(prior_3_dates)
+            yesterday_spend = yesterday_data[spent_col].sum() if spent_col else 0
+            avg_prior_spend = prior_data[spent_col].sum() / len(prior_3_dates) if spent_col else 0
             
             if avg_prior_spend > 0:
                 percent_increase = (yesterday_spend - avg_prior_spend) / avg_prior_spend
@@ -221,7 +257,7 @@ def format_email(alerts):
     if not alerts:
         return None, "Spending is within normal parameters and no action is required today."
         
-    subject = f"🚨 Action Required: Campaign Alert [V5.0 - VOLUME ONLY] - {datetime.datetime.now().strftime('%Y-%m-%d')}"
+    subject = f"🚨 Action Required: Campaign Alert [V5.1 - ROBUST MAPPING] - {datetime.datetime.now().strftime('%Y-%m-%d')}"
     body = "Hi Team,\n\nThe following campaigns are currently exceeding their target KPIs or spending anomalies have been detected:\n\n"
     
     for i, alert in enumerate(alerts, 1):
@@ -255,13 +291,13 @@ def send_email(subject, body):
 
 
 def main():
-    print(f"Starting Campaign Alert Script (v4.0 - Python Only) at {datetime.datetime.now()}")
+    print(f"Starting Campaign Alert Script (v5.1 - Robust Mapping) at {datetime.datetime.now()}")
     client = get_sheets_client()
     result = fetch_spreadsheet_data(client)
     if result is None: return
     
-    df, date_col, status_col = result
-    alerts = analyze_data(df, date_col, status_col)
+    df, date_col, status_col, metric_map = result
+    alerts = analyze_data(df, date_col, status_col, metric_map)
     
     subject, body = format_email(alerts)
     if subject:
