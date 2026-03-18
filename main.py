@@ -152,7 +152,11 @@ def fetch_meta_automated_rules(access_token, ad_account_ids):
     try:
         FacebookAdsApi.init(access_token=access_token)
         for account_id in ad_account_ids:
+            # Clean ID (strip .0 if it was converted to float by pandas)
             acc_id_str = str(account_id).strip()
+            if acc_id_str.endswith('.0'):
+                acc_id_str = acc_id_str[:-2]
+            
             if not acc_id_str or acc_id_str == 'nan' or acc_id_str == 'None': continue
             
             full_id = acc_id_str if acc_id_str.startswith('act_') else f"act_{acc_id_str}"
@@ -315,12 +319,21 @@ def analyze_data(df, date_col, status_col, metric_map, ad_account_col, campaign_
                         'reason': "High spend anomaly"
                     })
 
-        # 3. Meta Automation Rule Audit (V6.7)
+        # 3. Meta Automation Rule Audit (V6.9)
         if status == 'active':
             # Get account ID from sheet, or fallback to environment variable
             sheet_acc_id = str(latest_row.get(ad_account_col, '')).strip() if ad_account_col else ''
+            
+            # Clean ID (strip .0 if it was converted to float)
+            if sheet_acc_id.endswith('.0'):
+                sheet_acc_id = sheet_acc_id[:-2]
+                
             acc_id = sheet_acc_id if sheet_acc_id and sheet_acc_id != 'nan' else FB_AD_ACCOUNT_ID
+            
             camp_id = str(latest_row.get(campaign_id_col, '')).strip() if campaign_id_col else ''
+            # Clean ID (strip .0 if it was converted to float)
+            if camp_id.endswith('.0'):
+                camp_id = camp_id[:-2]
             
             acc_id_str = str(acc_id).strip()
             if not acc_id_str or acc_id_str == 'nan' or acc_id_str == 'None':
@@ -397,7 +410,7 @@ def format_email(alert_groups):
     if not has_alerts and not alert_groups.get('audit_error'):
         return None, "Spending is within normal parameters and no action is required today."
         
-    subject = f"🚨 Action Required: Campaign Alert [V6.8 - PRECISE AUDIT] - {datetime.datetime.now().strftime('%Y-%m-%d')}"
+    subject = f"🚨 Action Required: Campaign Alert [V6.9 - ID FIX] - {datetime.datetime.now().strftime('%Y-%m-%d')}"
     body = "Hi Team,\n\nThe following campaigns require attention based on their performance and spending patterns:\n\n"
     
     if alert_groups.get('audit_error'):
@@ -439,7 +452,7 @@ def format_email(alert_groups):
             body += f"   - 💰 Detail: {alert['spent_line']}\n"
             body += f"   - 🚦 Campaign Status: {alert['status']}\n\n"
             
-    body += "---\nPlease review your Ads Manager.\n- Alert System (V6.8)"
+    body += "---\nPlease review your Ads Manager.\n- Alert System (V6.9)"
     return subject, body
 
 
@@ -463,7 +476,7 @@ def send_email(subject, body):
 
 
 def main():
-    print(f"Starting Campaign Alert Script (v6.8 - precise audit) at {datetime.datetime.now()}")
+    print(f"Starting Campaign Alert Script (v6.9 - ID conversion fix) at {datetime.datetime.now()}")
     client = get_sheets_client()
     result = fetch_spreadsheet_data(client)
     if result is None: return
