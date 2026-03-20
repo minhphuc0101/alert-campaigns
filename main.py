@@ -176,35 +176,64 @@ def fetch_meta_automated_rules(access_token, ad_account_ids):
                 except:
                     pass # Continue with Sheet IDs if lookup fails
 
-                # 2. Fetch and count Rules across ALL pages
-                rules_cursor = account.get_ad_rules_library(fields=['name', 'status', 'evaluation_spec', 'execution_spec'])
+                # 2. Fetch and count Rules across ALL pages (V7.9 - Paging & Global Detection)
+                rules_cursor = account.get_ad_rules_library(
+                    fields=['name', 'status', 'evaluation_spec', 'execution_spec'],
+                    params={'limit': 250} # Optimize page size
+                )
                 
                 target_campaign_ids = set()
                 rule_count = 0
                 enabled_count = 0
+                has_global_pause = False
                 
                 for rule in rules_cursor: # SDK handles paging automatically
                     rule_count += 1
                     if rule.get('status') != 'ENABLED': continue
                     enabled_count += 1
                     
+                    # 1. Action Check: Is it a "PAUSE" rule?
+                    exec_spec = rule.get('execution_spec', {})
+                    is_pause = exec_spec.get('execution_type') == 'PAUSE'
+                    if not is_pause: continue
+                    
+                    # 2. Scope Check: Specific IDs or Account-wide?
                     eval_spec = rule.get('evaluation_spec', {})
                     filters = eval_spec.get('filters', [])
+                    
+                    id_filter_found = False
                     for f in filters:
                         if f.get('field') == 'campaign.id':
+                            id_filter_found = True
                             vals = f.get('value')
                             if not isinstance(vals, list): vals = [vals]
                             target_campaign_ids.update([str(v) for v in vals])
+                    
+                    # 3. GLOBAL Detection: Enabled PAUSE rule without ID restrictions
+                    if not id_filter_found:
+                        # If a PAUSE rule exists but has no campaign.id filter, we treat it as 
+                        # potentially account-wide or name-based (safer to assume coverage)
+                        has_global_pause = True
                 
-                print(f"DEBUG: Found {rule_count} rules ({enabled_count} Enabled). Audit covered {len(target_campaign_ids)} unique Campaign IDs.")
+                global_msg = " [GLOBAL PAUSE DETECTED]" if has_global_pause else ""
+                print(f"DEBUG: Found {rule_count} rules ({enabled_count} Enabled). Audit covered {len(target_campaign_ids)} IDs.{global_msg}")
+                
                 rules_by_account[full_id] = {
+                    'error': None,
                     'protected_ids': target_campaign_ids,
+                    'has_global_pause': has_global_pause,
                     'meta_map': name_to_id_map
                 }
                     
             except Exception as e:
-                print(f"Error fetching rules for {full_id}: {e}")
-                rules_by_account[full_id] = f"Error: {str(e)}"
+                err_msg = f"Error: {str(e)}"
+                print(f"Error fetching rules for {full_id}: {err_msg}")
+                rules_by_account[full_id] = {
+                    'error': err_msg,
+                    'protected_ids': set(),
+                    'has_global_pause': False,
+                    'meta_map': {}
+                }
             
     except Exception as e:
         error_msg = f"Meta API Connection Error: {str(e)}"
@@ -364,11 +393,11 @@ def analyze_data(df, date_col, status_col, metric_map, ad_account_col, ad_accoun
                 full_acc_id = acc_id_str if acc_id_str.startswith('act_') else f"act_{acc_id_str}"
                 if full_acc_id in meta_rules:
                     acc_data = meta_rules[full_acc_id]
-                    if isinstance(acc_data, str) and acc_data.startswith('Error:'):
+                    if acc_data.get('error'):
                         missing_automation_alerts.append({
                             'campaign': campaign,
                             'acc_name': acc_name,
-                            'issue': f"Meta Audit Skipped: {acc_data}",
+                            'issue': f"Meta Audit Skipped: {acc_data['error']}",
                             'reason': "Missing Meta Automation"
                         })
                     else:
@@ -384,7 +413,7 @@ def analyze_data(df, date_col, status_col, metric_map, ad_account_col, ad_accoun
                         if not final_camp_id and campaign in meta_map:
                             final_camp_id = meta_map[campaign]
                         
-                        is_covered = final_camp_id and final_camp_id in protected_ids
+                        is_covered = (final_camp_id and final_camp_id in protected_ids) or acc_data.get('has_global_pause', False)
                         
                         if not is_covered:
                              msg = "No active 'Pause' rule found for this campaign ID"
@@ -425,7 +454,7 @@ def format_email(alert_groups):
     if not has_alerts and not alert_groups.get('audit_error'):
         return None, "Spending is within normal parameters and no action is required today."
         
-    subject = f"🚨 Action Required: Campaign Alert [V7.8 - FINAL] - {datetime.datetime.now().strftime('%Y-%m-%d')}"
+    subject = f"🚨 Action Required: Campaign Alert [V7.9 - FINAL] - {datetime.datetime.now().strftime('%Y-%m-%d')}"
     body = "Hi Team,\n\nThe following campaigns require attention based on their performance and spending patterns:\n\n"
     
     if alert_groups.get('audit_error'):
@@ -489,7 +518,7 @@ def send_email(subject, body):
 
 
 def main():
-    print(f"Starting Campaign Alert Script (v7.8 - final) at {datetime.datetime.now()}")
+    print(f"Starting Campaign Alert Script (v7.9 - rules fixed) at {datetime.datetime.now()}")
     client = get_sheets_client()
     result = fetch_spreadsheet_data(client)
     if result is None: return
