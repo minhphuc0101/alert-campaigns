@@ -55,25 +55,31 @@ def fetch_spreadsheet_data(client):
         print(f"Error opening Google Sheet: {e}")
         exit(1)
 
-    data = sheet.get_all_records()
-    df = pd.DataFrame(data)
-
-    if df.empty:
-        print("The sheet is empty.")
+    # Fetch all values manually (V8.1: Avoid get_all_records duplicate header error)
+    rows = sheet.get_all_values()
+    if not rows or len(rows) < 2:
+        print("The sheet is empty or lacks data.")
         return None
 
+    headers = rows[0]
+    data = rows[1:]
+
     # 1. Standardize and Deduplicate Column Names
-    raw_columns = [str(c).strip().lower() for c in df.columns]
     new_columns = []
     seen = {}
-    for col in raw_columns:
-        if col in seen:
-            seen[col] += 1
-            new_columns.append(f"{col}_{seen[col]}")
+    for i, col in enumerate(headers):
+        # Handle empty/blank headers
+        col_str = str(col).strip().lower()
+        if not col_str: col_str = f"unnamed_{i}"
+        
+        if col_str in seen:
+            seen[col_str] += 1
+            new_columns.append(f"{col_str}_{seen[col_str]}")
         else:
-            seen[col] = 0
-            new_columns.append(col)
-    df.columns = new_columns
+            seen[col_str] = 0
+            new_columns.append(col_str)
+            
+    df = pd.DataFrame(data, columns=new_columns)
 
     # 2. Find Best Matching Columns via Keywords
     def find_col(keywords):
@@ -467,7 +473,7 @@ def format_email(alert_groups):
     if not has_alerts and not alert_groups.get('audit_error'):
         return None, "Spending is within normal parameters and no action is required today."
         
-    subject = f"🚨 Action Required: Campaign Alert [V8.0 - FINAL] - {datetime.datetime.now().strftime('%Y-%m-%d')}"
+    subject = f"🚨 Action Required: Campaign Alert [V8.1 - FINAL] - {datetime.datetime.now().strftime('%Y-%m-%d')}"
     body = "Hi Team,\n\nThe following campaigns require attention based on their performance and spending patterns:\n\n"
     
     if alert_groups.get('audit_error'):
@@ -531,7 +537,7 @@ def send_email(subject, body):
 
 
 def main():
-    print(f"Starting Campaign Alert Script (v8.0 - multiple account fix) at {datetime.datetime.now()}")
+    print(f"Starting Campaign Alert Script (v8.1 - header fix) at {datetime.datetime.now()}")
     client = get_sheets_client()
     result = fetch_spreadsheet_data(client)
     if result is None: return
