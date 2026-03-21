@@ -191,8 +191,6 @@ def fetch_meta_automated_rules(access_token, ad_account_ids):
                 target_campaign_ids = set()
                 rule_count = 0
                 enabled_count = 0
-                has_global_pause = False
-                
                 for rule in rules_cursor: # SDK handles paging automatically
                     rule_count += 1
                     if rule.get('status') != 'ENABLED': continue
@@ -203,36 +201,28 @@ def fetch_meta_automated_rules(access_token, ad_account_ids):
                     is_pause = exec_spec.get('execution_type') == 'PAUSE'
                     if not is_pause: continue
                     
-                    # 2. Scope Check: Specific IDs or Account-wide?
+                    # 2. Scope Check: Strict ID matching (V8.3)
                     eval_spec = rule.get('evaluation_spec', {})
                     filters = eval_spec.get('filters', [])
                     rule_name = rule.get('name', 'Unnamed Rule')
                     
-                    id_filter_found = False
+                    rule_covers_ids = False
                     for f in filters:
                         if f.get('field') == 'campaign.id':
-                            id_filter_found = True
+                            rule_covers_ids = True
                             vals = f.get('value')
                             if not isinstance(vals, list): vals = [vals]
                             target_campaign_ids.update([str(v) for v in vals])
                     
-                    # 3. GLOBAL Detection: Enabled PAUSE rule without ID restrictions
-                    if not id_filter_found:
-                        # If a PAUSE rule exists but has no campaign.id filter, we treat it as 
-                        # potentially account-wide or name-based (safer to assume coverage)
-                        has_global_pause = True
-                        if rule_count <= 10: # Avoid log spamming if hundreds of rules
-                             print(f"   [INFO] Found rule: {rule_name} (Global/Name scope)")
-                    elif rule_count <= 10:
-                        print(f"   [INFO] Found rule: {rule_name} (ID-based, total covered: {len(target_campaign_ids)})")
+                    if rule_count <= 15:
+                        scope = f"ID-based, total covered: {len(target_campaign_ids)}" if rule_covers_ids else "Other scope (Skipped)"
+                        print(f"   [INFO] Found rule: {rule_name} ({scope})")
                 
-                global_msg = " [GLOBAL PAUSE DETECTED]" if has_global_pause else ""
-                print(f"DEBUG: Found {rule_count} rules ({enabled_count} Enabled). Audit covered {len(target_campaign_ids)} IDs.{global_msg}")
+                print(f"DEBUG: Found {rule_count} rules ({enabled_count} Enabled). Audit covered {len(target_campaign_ids)} IDs.")
                 
                 rules_by_account[full_id] = {
                     'error': None,
                     'protected_ids': target_campaign_ids,
-                    'has_global_pause': has_global_pause,
                     'meta_map': name_to_id_map
                 }
                     
@@ -440,7 +430,7 @@ def analyze_data(df, date_col, status_col, metric_map, ad_account_col, ad_accoun
                         if not final_camp_id and campaign in meta_map:
                             final_camp_id = meta_map[campaign]
                         
-                        is_covered = (final_camp_id and final_camp_id in protected_ids) or acc_data.get('has_global_pause', False)
+                        is_covered = final_camp_id and final_camp_id in protected_ids
                         
                         if not is_covered:
                              msg = "No active 'Pause' rule found for this campaign ID"
@@ -481,7 +471,7 @@ def format_email(alert_groups):
     if not has_alerts and not alert_groups.get('audit_error'):
         return None, "Spending is within normal parameters and no action is required today."
         
-    subject = f"🚨 Action Required: Campaign Alert [V8.2 - FINAL] - {datetime.datetime.now().strftime('%Y-%m-%d')}"
+    subject = f"🚨 Action Required: Campaign Alert [V8.3 - FINAL] - {datetime.datetime.now().strftime('%Y-%m-%d')}"
     body = "Hi Team,\n\nThe following campaigns require attention based on their performance and spending patterns:\n\n"
     
     if alert_groups.get('audit_error'):
@@ -545,7 +535,7 @@ def send_email(subject, body):
 
 
 def main():
-    print(f"Starting Campaign Alert Script (v8.2 - rule logging) at {datetime.datetime.now()}")
+    print(f"Starting Campaign Alert Script (v8.3 - strict IDs) at {datetime.datetime.now()}")
     client = get_sheets_client()
     result = fetch_spreadsheet_data(client)
     if result is None: return
