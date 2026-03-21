@@ -206,6 +206,7 @@ def fetch_meta_automated_rules(access_token, ad_account_ids):
                     # 2. Scope Check: Specific IDs or Account-wide?
                     eval_spec = rule.get('evaluation_spec', {})
                     filters = eval_spec.get('filters', [])
+                    rule_name = rule.get('name', 'Unnamed Rule')
                     
                     id_filter_found = False
                     for f in filters:
@@ -220,6 +221,10 @@ def fetch_meta_automated_rules(access_token, ad_account_ids):
                         # If a PAUSE rule exists but has no campaign.id filter, we treat it as 
                         # potentially account-wide or name-based (safer to assume coverage)
                         has_global_pause = True
+                        if rule_count <= 10: # Avoid log spamming if hundreds of rules
+                             print(f"   [INFO] Found rule: {rule_name} (Global/Name scope)")
+                    elif rule_count <= 10:
+                        print(f"   [INFO] Found rule: {rule_name} (ID-based, total covered: {len(target_campaign_ids)})")
                 
                 global_msg = " [GLOBAL PAUSE DETECTED]" if has_global_pause else ""
                 print(f"DEBUG: Found {rule_count} rules ({enabled_count} Enabled). Audit covered {len(target_campaign_ids)} IDs.{global_msg}")
@@ -383,15 +388,18 @@ def analyze_data(df, date_col, status_col, metric_map, ad_account_col, ad_accoun
 
         # 3. Meta Automation Rule Audit (V7.2)
         if status == 'active':
-            # Get account IDs and name from sheet
-            sheet_acc_id = str(latest_row.get(ad_account_col, '')).strip() if ad_account_col else ''
+            # Get account IDs and name from sheet (V8.2 - Use robust cleaning)
+            raw_acc_val = latest_row.get(ad_account_col, '') if ad_account_col else ''
             acc_name = str(latest_row.get(ad_account_name_col, 'Unknown Account')).strip() if ad_account_name_col else 'Unknown Account'
             
-            # Clean ID (strip .0 if it was converted to float)
-            if sheet_acc_id.endswith('.0'):
-                sheet_acc_id = sheet_acc_id[:-2]
+            try:
+                acc_id = str(int(float(raw_acc_val)))
+            except:
+                acc_id = str(raw_acc_val).strip()
+                if acc_id.endswith('.0'): acc_id = acc_id[:-2]
                 
-            acc_id = sheet_acc_id if sheet_acc_id and sheet_acc_id != 'nan' else FB_AD_ACCOUNT_ID
+            if not acc_id or acc_id == 'nan' or acc_id == '0':
+                acc_id = FB_AD_ACCOUNT_ID
             
             camp_id = str(latest_row.get(campaign_id_col, '')).strip() if campaign_id_col else ''
             # Clean ID (strip .0 if it was converted to float)
@@ -473,7 +481,7 @@ def format_email(alert_groups):
     if not has_alerts and not alert_groups.get('audit_error'):
         return None, "Spending is within normal parameters and no action is required today."
         
-    subject = f"🚨 Action Required: Campaign Alert [V8.1 - FINAL] - {datetime.datetime.now().strftime('%Y-%m-%d')}"
+    subject = f"🚨 Action Required: Campaign Alert [V8.2 - FINAL] - {datetime.datetime.now().strftime('%Y-%m-%d')}"
     body = "Hi Team,\n\nThe following campaigns require attention based on their performance and spending patterns:\n\n"
     
     if alert_groups.get('audit_error'):
@@ -537,7 +545,7 @@ def send_email(subject, body):
 
 
 def main():
-    print(f"Starting Campaign Alert Script (v8.1 - header fix) at {datetime.datetime.now()}")
+    print(f"Starting Campaign Alert Script (v8.2 - rule logging) at {datetime.datetime.now()}")
     client = get_sheets_client()
     result = fetch_spreadsheet_data(client)
     if result is None: return
