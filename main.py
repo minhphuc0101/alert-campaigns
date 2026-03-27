@@ -449,6 +449,15 @@ def analyze_data(df, date_col, status_col, metric_map, ad_account_col, ad_accoun
                         
                         is_covered = final_camp_id and final_camp_id in protected_ids
                         
+                        # V8.7: Deep Trace for targeted debugging
+                        if not is_covered and final_camp_id and 'Volvo' in campaign:
+                            print(f"   [TRACE] Campaign: {campaign}")
+                            print(f"   [TRACE] Searching for ID: '{final_camp_id}' (Type: {type(final_camp_id)})")
+                            print(f"   [TRACE] In Account: '{full_acc_id}'")
+                            print(f"   [TRACE] Account Protected IDs: {list(protected_ids)[:10]}")
+                            if protected_ids:
+                                print(f"   [TRACE] First Protected ID Type: {type(list(protected_ids)[0])}")
+                        
                         if not is_covered:
                              msg = "No active 'Pause' rule found for this campaign ID"
                              if not final_camp_id: msg = "Cannot Audit: ID missing in sheet & lookup failed"
@@ -488,7 +497,7 @@ def format_email(alert_groups):
     if not has_alerts and not alert_groups.get('audit_error'):
         return None, "Spending is within normal parameters and no action is required today."
         
-    subject = f"🚨 Action Required: Campaign Alert [V8.6] - {datetime.datetime.now().strftime('%Y-%m-%d')}"
+    subject = f"🚨 Action Required: Campaign Alert [V8.7] - {datetime.datetime.now().strftime('%Y-%m-%d')}"
     body = "Hi Team,\n\nThe following campaigns require attention based on their performance and spending patterns:\n\n"
     
     if alert_groups.get('audit_error'):
@@ -552,7 +561,7 @@ def send_email(subject, body):
 
 
 def main():
-    print(f"Starting Campaign Alert Script (v8.6 - detailed logs) at {datetime.datetime.now()}")
+    print(f"Starting Campaign Alert Script (v8.7 - deep trace) at {datetime.datetime.now()}")
     client = get_sheets_client()
     result = fetch_spreadsheet_data(client)
     if result is None: return
