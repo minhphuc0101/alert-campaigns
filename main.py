@@ -209,15 +209,20 @@ def fetch_meta_automated_rules(access_token, ad_account_ids):
                     rule_name = rule.get('name', 'Unnamed Rule')
                     
                     rule_covers_ids = False
+                    rule_ids = []
                     for f in filters:
                         if f.get('field') == 'campaign.id':
                             rule_covers_ids = True
                             vals = f.get('value')
                             if not isinstance(vals, list): vals = [vals]
-                            target_campaign_ids.update([str(v) for v in vals])
+                            rule_ids = [str(v) for v in vals]
+                            target_campaign_ids.update(rule_ids)
                     
-                    if rule_count <= 15:
-                        scope = f"ID-based, total covered: {len(target_campaign_ids)}" if rule_covers_ids else "Other scope (Skipped)"
+                    if rule_count <= 25: # V8.6: More verbose rule logging
+                        if rule_covers_ids:
+                             scope = f"ID-based, covers {len(rule_ids)}: {', '.join(rule_ids[:5])}{'...' if len(rule_ids)>5 else ''}"
+                        else:
+                             scope = "Other scope (Skipped)"
                         print(f"   [INFO] Found rule: {rule_name} ({scope})")
                 
                 print(f"DEBUG: Found {rule_count} rules ({enabled_count} Enabled). Audit covered {len(target_campaign_ids)} IDs.")
@@ -483,7 +488,7 @@ def format_email(alert_groups):
     if not has_alerts and not alert_groups.get('audit_error'):
         return None, "Spending is within normal parameters and no action is required today."
         
-    subject = f"🚨 Action Required: Campaign Alert [V8.5] - {datetime.datetime.now().strftime('%Y-%m-%d')}"
+    subject = f"🚨 Action Required: Campaign Alert [V8.6] - {datetime.datetime.now().strftime('%Y-%m-%d')}"
     body = "Hi Team,\n\nThe following campaigns require attention based on their performance and spending patterns:\n\n"
     
     if alert_groups.get('audit_error'):
@@ -547,7 +552,7 @@ def send_email(subject, body):
 
 
 def main():
-    print(f"Starting Campaign Alert Script (v8.5 - strict string IDs) at {datetime.datetime.now()}")
+    print(f"Starting Campaign Alert Script (v8.6 - detailed logs) at {datetime.datetime.now()}")
     client = get_sheets_client()
     result = fetch_spreadsheet_data(client)
     if result is None: return
