@@ -286,12 +286,9 @@ def analyze_data(df, date_col, status_col, metric_map, ad_account_col, ad_accoun
     raw_acc_ids = df[ad_account_col].dropna().unique() if ad_account_col else []
     unique_account_ids = []
     for i in raw_acc_ids:
-        try:
-            # Handle IDs that might be in float format (e.g. 1.23E+15)
-            s = str(int(float(i)))
-        except:
-            s = str(i).strip()
-            if s.endswith('.0'): s = s[:-2]
+        # V8.5: Prefer string cleaning to avoid precision loss on long IDs
+        s = str(i).strip()
+        if s.endswith('.0'): s = s[:-2]
         
         if s and s != 'nan' and s != '0' and s not in unique_account_ids:
             unique_account_ids.append(s)
@@ -395,15 +392,12 @@ def analyze_data(df, date_col, status_col, metric_map, ad_account_col, ad_accoun
 
         # 3. Meta Automation Rule Audit (V7.2)
         if status == 'active':
-            # Get account IDs and name from sheet (V8.2 - Use robust cleaning)
+            # Get account IDs and name from sheet (V8.5 - Strict String Mode)
             raw_acc_val = latest_row.get(ad_account_col, '') if ad_account_col else ''
             acc_name = str(latest_row.get(ad_account_name_col, 'Unknown Account')).strip() if ad_account_name_col else 'Unknown Account'
             
-            try:
-                acc_id = str(int(float(raw_acc_val)))
-            except:
-                acc_id = str(raw_acc_val).strip()
-                if acc_id.endswith('.0'): acc_id = acc_id[:-2]
+            acc_id = str(raw_acc_val).strip()
+            if acc_id.endswith('.0'): acc_id = acc_id[:-2]
                 
             if not acc_id or acc_id == 'nan' or acc_id == '0':
                 acc_id = FB_AD_ACCOUNT_ID
@@ -489,7 +483,7 @@ def format_email(alert_groups):
     if not has_alerts and not alert_groups.get('audit_error'):
         return None, "Spending is within normal parameters and no action is required today."
         
-    subject = f"🚨 Action Required: Campaign Alert [V8.4] - {datetime.datetime.now().strftime('%Y-%m-%d')}"
+    subject = f"🚨 Action Required: Campaign Alert [V8.5] - {datetime.datetime.now().strftime('%Y-%m-%d')}"
     body = "Hi Team,\n\nThe following campaigns require attention based on their performance and spending patterns:\n\n"
     
     if alert_groups.get('audit_error'):
@@ -553,7 +547,7 @@ def send_email(subject, body):
 
 
 def main():
-    print(f"Starting Campaign Alert Script (v8.4 - string IDs) at {datetime.datetime.now()}")
+    print(f"Starting Campaign Alert Script (v8.5 - strict string IDs) at {datetime.datetime.now()}")
     client = get_sheets_client()
     result = fetch_spreadsheet_data(client)
     if result is None: return
