@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 from facebook_business.api import FacebookAdsApi
 from facebook_business.adobjects.adaccount import AdAccount
 from facebook_business.adobjects.campaign import Campaign
+from facebook_business.exceptions import FacebookRequestError
 
 # Load environment variables
 load_dotenv()
@@ -79,7 +80,8 @@ def fetch_spreadsheet_data(client):
             seen[col_str] = 0
             new_columns.append(col_str)
             
-    df = pd.DataFrame(data, columns=new_columns)
+    # V8.4: Use dtype=str to prevent large IDs from being converted to float (precision loss)
+    df = pd.DataFrame(data, columns=new_columns, dtype=str)
 
     # 2. Find Best Matching Columns via Keywords
     def find_col(keywords):
@@ -161,14 +163,14 @@ def fetch_meta_automated_rules(access_token, ad_account_ids):
     try:
         FacebookAdsApi.init(access_token=access_token)
         for account_id in ad_account_ids:
-            # Clean ID (V7.7: Handle 'plain text' but also guard against float string residues)
+            # Clean ID (V8.4: Robust cleaning - avoid floats for precision)
             acc_id_str = str(account_id).strip()
             if acc_id_str.endswith('.0'): acc_id_str = acc_id_str[:-2]
             
             if not acc_id_str or acc_id_str == 'nan' or acc_id_str == 'None': continue
             
             full_id = acc_id_str if acc_id_str.startswith('act_') else f"act_{acc_id_str}"
-            print(f"Checking Account: {full_id} (V7.7 - Plain Text Mode & Paging Fixed)...")
+            print(f"Checking Account: {full_id} (V8.4 - Strict String Mode)...")
             
             try:
                 account = AdAccount(full_id)
@@ -226,13 +228,28 @@ def fetch_meta_automated_rules(access_token, ad_account_ids):
                     'meta_map': name_to_id_map
                 }
                     
-            except Exception as e:
-                err_msg = f"Error: {str(e)}"
+            except FacebookRequestError as e:
+                # V8.4: Succinct logging for Permission Errors
+                api_error = e.api_error_message()
+                error_code = e.api_error_code()
+                
+                if error_code == 200:
+                    err_msg = "Access Denied: Ad account owner has not granted ads_read/ads_management permission."
+                else:
+                    err_msg = f"Meta API Error ({error_code}): {api_error}"
+                
                 print(f"Error fetching rules for {full_id}: {err_msg}")
                 rules_by_account[full_id] = {
                     'error': err_msg,
                     'protected_ids': set(),
-                    'has_global_pause': False,
+                    'meta_map': {}
+                }
+            except Exception as e:
+                err_msg = f"Unexpected Error: {str(e)[:100]}..." # Avoid huge error dumps
+                print(f"Error fetching rules for {full_id}: {err_msg}")
+                rules_by_account[full_id] = {
+                    'error': err_msg,
+                    'protected_ids': set(),
                     'meta_map': {}
                 }
             
@@ -403,6 +420,7 @@ def analyze_data(df, date_col, status_col, metric_map, ad_account_col, ad_accoun
                     'status': status,
                     'issue': "Missing Ad Account ID in spreadsheet",
                     'spent_line': "Cannot check rules without Account ID",
+                    'acc_name': acc_name, # V8.4: Ensure name is available
                     'metrics': "High Risk",
                     'reason': "Missing Meta Automation"
                 })
@@ -471,7 +489,7 @@ def format_email(alert_groups):
     if not has_alerts and not alert_groups.get('audit_error'):
         return None, "Spending is within normal parameters and no action is required today."
         
-    subject = f"🚨 Action Required: Campaign Alert [V8.3 - FINAL] - {datetime.datetime.now().strftime('%Y-%m-%d')}"
+    subject = f"🚨 Action Required: Campaign Alert [V8.4] - {datetime.datetime.now().strftime('%Y-%m-%d')}"
     body = "Hi Team,\n\nThe following campaigns require attention based on their performance and spending patterns:\n\n"
     
     if alert_groups.get('audit_error'):
@@ -535,7 +553,7 @@ def send_email(subject, body):
 
 
 def main():
-    print(f"Starting Campaign Alert Script (v8.3 - strict IDs) at {datetime.datetime.now()}")
+    print(f"Starting Campaign Alert Script (v8.4 - string IDs) at {datetime.datetime.now()}")
     client = get_sheets_client()
     result = fetch_spreadsheet_data(client)
     if result is None: return
