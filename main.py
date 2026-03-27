@@ -83,18 +83,28 @@ def fetch_spreadsheet_data(client):
     # V8.4: Use dtype=str to prevent large IDs from being converted to float (precision loss)
     df = pd.DataFrame(data, columns=new_columns, dtype=str)
 
-    # 2. Find Best Matching Columns via Keywords
+    # 2. Find Best Matching Columns via Keywords (V8.8: Prioritize Exact Matches)
     def find_col(keywords):
+        # First Pass: Exact Matches
         for col in df.columns:
-            if any(kw in col for kw in keywords):
+            if col in keywords:
                 return col
+        # Second Pass: Partial Matches (only for longer keywords)
+        for col in df.columns:
+            if any(kw in col for kw in keywords if len(kw) > 2):
+                return col
+        # Last Resort: Minimalist 'id' match
+        if 'id' in keywords:
+            for col in df.columns:
+                if 'id' in col:
+                    return col
         return None
 
     date_col = find_col(['date', 'day'])
     status_col = find_col(['status', 'state'])
     ad_account_col = find_col(['ad account id', 'account id', 'account_id', 'ad_account_id', 'meta account', 'account_no'])
     ad_account_name_col = find_col(['ad account name', 'account name', 'account_name'])
-    campaign_id_col = find_col(['campaign id', 'id', 'campaign_id', 'cp id', 'meta id'])
+    campaign_id_col = find_col(['campaign id', 'campaign_id', 'cp id', 'meta id', 'id'])
     
     # Metrics Mapping
     metric_map = {
@@ -449,12 +459,12 @@ def analyze_data(df, date_col, status_col, metric_map, ad_account_col, ad_accoun
                         
                         is_covered = final_camp_id and final_camp_id in protected_ids
                         
-                        # V8.7: Deep Trace for targeted debugging
-                        if not is_covered and final_camp_id and 'Volvo' in campaign:
+                        # V8.7 Trace: Keep active for debugging V8.8 results
+                        if not is_covered and final_camp_id and ('Volvo' in campaign or len(final_camp_id) < 10):
                             print(f"   [TRACE] Campaign: {campaign}")
                             print(f"   [TRACE] Searching for ID: '{final_camp_id}' (Type: {type(final_camp_id)})")
                             print(f"   [TRACE] In Account: '{full_acc_id}'")
-                            print(f"   [TRACE] Account Protected IDs: {list(protected_ids)[:10]}")
+                            # print(f"   [TRACE] Account Protected IDs: {list(protected_ids)[:10]}")
                             if protected_ids:
                                 print(f"   [TRACE] First Protected ID Type: {type(list(protected_ids)[0])}")
                         
@@ -497,7 +507,7 @@ def format_email(alert_groups):
     if not has_alerts and not alert_groups.get('audit_error'):
         return None, "Spending is within normal parameters and no action is required today."
         
-    subject = f"🚨 Action Required: Campaign Alert [V8.7] - {datetime.datetime.now().strftime('%Y-%m-%d')}"
+    subject = f"🚨 Action Required: Campaign Alert [V8.8] - {datetime.datetime.now().strftime('%Y-%m-%d')}"
     body = "Hi Team,\n\nThe following campaigns require attention based on their performance and spending patterns:\n\n"
     
     if alert_groups.get('audit_error'):
@@ -561,7 +571,7 @@ def send_email(subject, body):
 
 
 def main():
-    print(f"Starting Campaign Alert Script (v8.7 - deep trace) at {datetime.datetime.now()}")
+    print(f"Starting Campaign Alert Script (v8.8 - prioritized mapping) at {datetime.datetime.now()}")
     client = get_sheets_client()
     result = fetch_spreadsheet_data(client)
     if result is None: return
