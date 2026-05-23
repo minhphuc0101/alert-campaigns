@@ -145,8 +145,8 @@ def fetch_spreadsheet_data(client):
 def extract_kpi_target(campaign_name):
     """Extracts numerical target from name (e.g. '3000 CPE' -> 3000, 'CPM_100' -> 100)."""
     # Look for patterns like '3000 CPE', 'CPM_100', '700 CPM'...
-    cpe_match = re.search(r'(\d+[,\d]*)\s*CPE|CPE[_\s]*(\d+[,\d]*)', campaign_name, re.I)
-    cpm_match = re.search(r'(\d+[,\d]*)\s*CPM|CPM[_\s]*(\d+[,\d]*)', campaign_name, re.I)
+    cpe_match = re.search(r'(\d+[,\d]*)[_\s]*CPE|CPE[_\s]*(\d+[,\d]*)', campaign_name, re.I)
+    cpm_match = re.search(r'(\d+[,\d]*)[_\s]*CPM|CPM[_\s]*(\d+[,\d]*)', campaign_name, re.I)
     
     def parse_num(val):
         if not val: return None
