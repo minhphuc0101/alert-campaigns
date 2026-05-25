@@ -21,6 +21,7 @@ load_dotenv()
 SENDER_EMAIL = os.getenv("EMAIL_SENDER_ADDRESS")
 SENDER_PASSWORD = os.getenv("EMAIL_SENDER_PASSWORD")
 RECIPIENT_EMAIL = "phuc.tran@digimind.asia"
+CC_EMAIL = "mediagroup@digimind.asia"
 
 # Google Sheets Info
 SHEET_ID = os.getenv("GOOGLE_SHEET_ID")
@@ -631,15 +632,17 @@ def send_email(subject, body):
     msg = MIMEMultipart()
     msg['From'] = SENDER_EMAIL
     msg['To'] = RECIPIENT_EMAIL
+    msg['Cc'] = CC_EMAIL
     msg['Subject'] = subject
     msg.attach(MIMEText(body, 'plain'))
     try:
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls()
         server.login(SENDER_EMAIL, SENDER_PASSWORD)
-        server.sendmail(SENDER_EMAIL, RECIPIENT_EMAIL, msg.as_string())
+        recipients = [RECIPIENT_EMAIL, CC_EMAIL]
+        server.sendmail(SENDER_EMAIL, recipients, msg.as_string())
         server.quit()
-        print(f"Email sent successfully to {RECIPIENT_EMAIL}")
+        print(f"Email sent successfully to {RECIPIENT_EMAIL} and CC'd {CC_EMAIL}")
     except Exception as e:
         print(f"Error sending email: {e}")
 
