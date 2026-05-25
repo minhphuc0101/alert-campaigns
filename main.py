@@ -275,6 +275,58 @@ def fetch_meta_automated_rules(access_token, ad_account_ids):
     return rules_by_account, error_msg
 
 
+def fetch_meta_ad_creatives(access_token, ad_account_ids):
+    """Fetches active ads to check for Advantage+ creative options."""
+    if not access_token:
+        return {}, "Meta Access Token (FB_ACCESS_TOKEN) is not set."
+
+    enhancements_by_account = {}
+    error_msg = None
+    try:
+        FacebookAdsApi.init(access_token=access_token)
+        for account_id in ad_account_ids:
+            acc_id_str = str(account_id).strip()
+            if acc_id_str.endswith('.0'): acc_id_str = acc_id_str[:-2]
+            if not acc_id_str or acc_id_str == 'nan' or acc_id_str == 'None': continue
+            
+            full_id = acc_id_str if acc_id_str.startswith('act_') else f"act_{acc_id_str}"
+            
+            try:
+                account = AdAccount(full_id)
+                ads = account.get_ads(
+                    fields=['campaign_id', 'creative{degrees_of_freedom_spec}'],
+                    params={'filtering': '[{"field":"effective_status","operator":"IN","value":["ACTIVE"]}]'}
+                )
+                
+                campaign_enhancements = {}
+                for ad in ads:
+                    camp_id = ad.get('campaign_id')
+                    creative = ad.get('creative', {})
+                    dof = creative.get('degrees_of_freedom_spec', {})
+                    features = dof.get('creative_features_spec', {})
+                    
+                    active_options = []
+                    if features.get('standard_enhancements', {}).get('enroll_status') == 'OPT_IN':
+                        active_options.append('Standard Enhancements')
+                    if features.get('multi_advertiser_ad_display', {}).get('enroll_status') == 'OPT_IN':
+                        active_options.append('Multi-advertiser Ads')
+                    if features.get('text_optimizations', {}).get('enroll_status') == 'OPT_IN':
+                        active_options.append('Text Optimizations')
+                    
+                    if active_options and camp_id:
+                        if camp_id not in campaign_enhancements:
+                            campaign_enhancements[camp_id] = set()
+                        for opt in active_options:
+                            campaign_enhancements[camp_id].add(opt)
+                            
+                enhancements_by_account[full_id] = campaign_enhancements
+            except Exception as e:
+                print(f"Error fetching creatives for {full_id}: {str(e)[:100]}")
+    except Exception as e:
+        error_msg = str(e)
+    return enhancements_by_account, error_msg
+
+
 def analyze_data(df, date_col, status_col, metric_map, ad_account_col, ad_account_name_col, campaign_id_col):
     """Performs mathematical analysis for alerts."""
     alerts = []
@@ -313,8 +365,10 @@ def analyze_data(df, date_col, status_col, metric_map, ad_account_col, ad_accoun
         
     print(f"DEBUG: Found {len(unique_account_ids)} Ad Accounts in sheet: {unique_account_ids}")
     meta_rules, meta_error = fetch_meta_automated_rules(FB_ACCESS_TOKEN, [str(i) for i in unique_account_ids])
+    meta_creatives, _ = fetch_meta_ad_creatives(FB_ACCESS_TOKEN, [str(i) for i in unique_account_ids])
     
     missing_automation_alerts = []
+    advantage_alerts = []
     skipped_audit_reason = meta_error
 
     for campaign in campaigns:
@@ -478,6 +532,15 @@ def analyze_data(df, date_col, status_col, metric_map, ad_account_col, ad_accoun
                                 'issue': msg,
                                 'reason': "Missing Meta Automation"
                             })
+                        
+                        # V8.9 Advantage+ Creative Check
+                        if final_camp_id and full_acc_id in meta_creatives:
+                            enabled_options = meta_creatives[full_acc_id].get(final_camp_id)
+                            if enabled_options:
+                                advantage_alerts.append({
+                                    'campaign': campaign,
+                                    'options': list(enabled_options)
+                                })
                 else:
                     # Not in meta_rules but we had a token? maybe skip reason was missed
                     if not meta_error:
@@ -498,6 +561,7 @@ def analyze_data(df, date_col, status_col, metric_map, ad_account_col, ad_accoun
         'kpi': kpi_alerts,
         'anomaly': anomaly_alerts,
         'missing_automation': missing_automation_alerts,
+        'advantage': advantage_alerts,
         'audit_error': skipped_audit_reason
     }
 
@@ -546,8 +610,18 @@ def format_email(alert_groups):
         for i, alert in enumerate(alert_groups['missing_automation'], 1):
             body += f"{i}. {alert['campaign']}, {alert['acc_name']}\n"
         body += "\n"
+        
+    # Section 4: Advantage+ Enabled
+    if alert_groups.get('advantage'):
+        body += "✨ SECTION 4: ADVANTAGE+ CREATIVE ENABLED\n"
+        body += "========================================\n"
+        body += "The following active campaigns have Advantage+ options enabled:\n\n"
+        for i, alert in enumerate(alert_groups['advantage'], 1):
+            opts_str = ", ".join(alert['options'])
+            body += f"{i}. {alert['campaign']}\n"
+            body += f"   - Enabled features: {opts_str}\n\n"
             
-    body += "---\nPlease review your Ads Manager.\n- Alert System (V7.8)"
+    body += "---\nPlease review your Ads Manager.\n- Alert System (V8.9)"
     return subject, body
 
 
