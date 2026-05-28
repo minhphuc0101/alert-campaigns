@@ -145,21 +145,21 @@ def fetch_spreadsheet_data(client):
 
 def extract_kpi_target(campaign_name):
     """Extracts numerical target from name (e.g. '3000 CPE' -> 3000, 'CPM_100' -> 100)."""
-    # Look for patterns like '3000 CPE', 'CPM_100', '700 CPM'...
-    cpe_match = re.search(r'(\d+[,\d]*)[_\s]*CPE|CPE[_\s]*(\d+[,\d]*)', campaign_name, re.I)
-    cpm_match = re.search(r'(\d+[,\d]*)[_\s]*CPM|CPM[_\s]*(\d+[,\d]*)', campaign_name, re.I)
+    # Look for numbers optionally before and after CPE/CPM
+    cpe_match = re.search(r'(?:(\d+[,\d]*)[_\s]*)?CPE(?:[_\s]*(\d+[,\d]*))?', campaign_name, re.I)
+    cpm_match = re.search(r'(?:(\d+[,\d]*)[_\s]*)?CPM(?:[_\s]*(\d+[,\d]*))?', campaign_name, re.I)
     
     def parse_num(val):
-        if not val: return None
+        if not val: return 0
         return int(val.replace(',', ''))
 
     if cpe_match:
-        val = parse_num(cpe_match.group(1) or cpe_match.group(2))
-        return 'CPE', val
+        val = max(parse_num(cpe_match.group(1)), parse_num(cpe_match.group(2)))
+        if val > 0: return 'CPE', val
     if cpm_match:
-        val = parse_num(cpm_match.group(1) or cpm_match.group(2))
+        val = max(parse_num(cpm_match.group(1)), parse_num(cpm_match.group(2)))
         # CPM is volume: X * 1000 impressions
-        return 'CPM', val * 1000
+        if val > 0: return 'CPM', val * 1000
         
     return None, None
 
