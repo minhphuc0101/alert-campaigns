@@ -613,14 +613,17 @@ def format_email(alert_groups):
         body += "\n"
         
     # Section 4: Advantage+ Enabled
-    if alert_groups.get('advantage'):
+    if 'advantage' in alert_groups:
         body += "✨ SECTION 4: ADVANTAGE+ CREATIVE ENABLED\n"
         body += "========================================\n"
-        body += "The following active campaigns have Advantage+ options enabled:\n\n"
-        for i, alert in enumerate(alert_groups['advantage'], 1):
-            opts_str = ", ".join(alert['options'])
-            body += f"{i}. {alert['campaign']}\n"
-            body += f"   - Enabled features: {opts_str}\n\n"
+        if alert_groups['advantage']:
+            body += "The following active campaigns have Advantage+ options enabled:\n\n"
+            for i, alert in enumerate(alert_groups['advantage'], 1):
+                opts_str = ", ".join(alert['options'])
+                body += f"{i}. {alert['campaign']}\n"
+                body += f"   - Enabled features: {opts_str}\n\n"
+        else:
+            body += "No active campaigns currently have Advantage+ enabled.\n\n"
             
     body += "---\nPlease review your Ads Manager.\n- Alert System (V8.9)"
     return subject, body
