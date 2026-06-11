@@ -143,17 +143,13 @@ def fetch_meta_ads_data(access_token):
 
         for c_id, c in camp_dict.items():
             name = c.get('name', 'Unknown')
-            if re.search(r'app install|lead|messenger', name, re.IGNORECASE):
-                continue
+            is_special_type = bool(re.search(r'app install|lead|messenger', name, re.IGNORECASE))
                 
             status = c.get('effective_status', c.get('status', 'UNKNOWN')).lower()
             spend_cap = float(c.get('spend_cap', 0))
             
             stats_14d = camp_14d_stats.get(c_id, {})
             total_spent = stats_14d.get('total_spent', 0)
-            
-            if total_spent < 2000000:
-                continue
                 
             row = {
                 'ad_account_id': acc_id.replace('act_', ''),
@@ -167,7 +163,8 @@ def fetch_meta_ads_data(access_token):
                 'total_impressions': stats_14d.get('total_impressions', 0),
                 'total_engagement': stats_14d.get('total_engagement', 0),
                 'total_video_views': stats_14d.get('total_video_views', 0),
-                'daily_spend': camp_daily_spend.get(c_id, {})
+                'daily_spend': camp_daily_spend.get(c_id, {}),
+                'is_special_type': is_special_type
             }
             all_campaign_data.append(row)
             
@@ -383,58 +380,60 @@ def analyze_data(campaign_data):
         total_impressions = row['total_impressions']
         total_reach = row['total_reach']
         total_video_views = row['total_video_views']
+        is_special_type = row.get('is_special_type', False)
         
-        kpi_type, kpi_target = extract_kpi_target(campaign)
-        if kpi_type and kpi_target:
-            if kpi_type == 'CPE':
-                if total_engagement > kpi_target:
-                    alerts.append({
-                        'campaign': campaign,
-                        'status': status,
-                        'issue': f"Volume Target reached (Target: {kpi_target:,} engagement, Actual 14d: {total_engagement:,.0f})",
-                        'spent_line': f"{total_spent:,.0f} (14d)",
-                        'metrics': f"Total Post Engagement: {total_engagement:,.0f}, Reach: {total_reach:,.0f}, Impressions: {total_impressions:,.0f}",
-                        'reason': "Engagement target achieved"
-                    })
-            elif kpi_type == 'CPM':
-                if total_impressions > kpi_target:
-                    alerts.append({
-                        'campaign': campaign,
-                        'status': status,
-                        'issue': f"Volume Target reached (Target: {kpi_target:,.0f} impressions, Actual 14d: {total_impressions:,.0f})",
-                        'spent_line': f"{total_spent:,.0f} (14d)",
-                        'metrics': f"Total Impressions: {total_impressions:,.0f}, Reach: {total_reach:,.0f}",
-                        'reason': "Impression target achieved"
-                    })
+        if not is_special_type:
+            kpi_type, kpi_target = extract_kpi_target(campaign)
+            if kpi_type and kpi_target:
+                if kpi_type == 'CPE':
+                    if total_engagement > kpi_target:
+                        alerts.append({
+                            'campaign': campaign,
+                            'status': status,
+                            'issue': f"Volume Target reached (Target: {kpi_target:,} engagement, Actual 14d: {total_engagement:,.0f})",
+                            'spent_line': f"{total_spent:,.0f} (14d)",
+                            'metrics': f"Total Post Engagement: {total_engagement:,.0f}, Reach: {total_reach:,.0f}, Impressions: {total_impressions:,.0f}",
+                            'reason': "Engagement target achieved"
+                        })
+                elif kpi_type == 'CPM':
+                    if total_impressions > kpi_target:
+                        alerts.append({
+                            'campaign': campaign,
+                            'status': status,
+                            'issue': f"Volume Target reached (Target: {kpi_target:,.0f} impressions, Actual 14d: {total_impressions:,.0f})",
+                            'spent_line': f"{total_spent:,.0f} (14d)",
+                            'metrics': f"Total Impressions: {total_impressions:,.0f}, Reach: {total_reach:,.0f}",
+                            'reason': "Impression target achieved"
+                        })
 
-        spend_cap = row['spend_cap']
-        if spend_cap > 0 and total_spent > spend_cap:
-             alerts.append({
-                'campaign': campaign,
-                'status': status,
-                'issue': f"Spending exceeds cap. Spent: {total_spent:,.0f} (Cap: {spend_cap:,.0f})",
-                'spent_line': f"{total_spent:,.0f} (Cap: {spend_cap:,.0f})",
-                'metrics': f"Reach: {total_reach:,.0f}, Impressions: {total_impressions:,.0f}, Post Engagement: {total_engagement:,.0f}",
-                'reason': "Spending exceeds cap"
-            })
-
-        daily_spends = row['daily_spend']
-        yesterday_spend = daily_spends.get(yesterday_str, 0)
-        prior_spends = [daily_spends.get(d, 0) for d in prior_3_dates]
-        
-        avg_prior_spend = sum(prior_spends) / len(prior_spends) if prior_spends else 0
-        
-        if avg_prior_spend >= 1000000:
-            percent_increase = (yesterday_spend - avg_prior_spend) / avg_prior_spend if avg_prior_spend > 0 else 0
-            if percent_increase > 0.30:
-                alerts.append({
+            spend_cap = row['spend_cap']
+            if spend_cap > 0 and total_spent > spend_cap:
+                 alerts.append({
                     'campaign': campaign,
                     'status': status,
-                    'issue': f"Yesterday spend ({yesterday_spend:,.0f}) is {percent_increase*100:.1f}% higher than 3-day avg ({avg_prior_spend:,.0f})",
-                    'spent_line': f"Yesterday: {yesterday_spend:,.0f} (Avg: {avg_prior_spend:,.0f})",
-                    'metrics': f"Date: {yesterday_str}",
-                    'reason': "High spend anomaly"
+                    'issue': f"Spending exceeds cap. Spent: {total_spent:,.0f} (Cap: {spend_cap:,.0f})",
+                    'spent_line': f"{total_spent:,.0f} (Cap: {spend_cap:,.0f})",
+                    'metrics': f"Reach: {total_reach:,.0f}, Impressions: {total_impressions:,.0f}, Post Engagement: {total_engagement:,.0f}",
+                    'reason': "Spending exceeds cap"
                 })
+
+            daily_spends = row['daily_spend']
+            yesterday_spend = daily_spends.get(yesterday_str, 0)
+            prior_spends = [daily_spends.get(d, 0) for d in prior_3_dates]
+            
+            avg_prior_spend = sum(prior_spends) / len(prior_spends) if prior_spends else 0
+            
+            if avg_prior_spend >= 1000000:
+                percent_increase = (yesterday_spend - avg_prior_spend) / avg_prior_spend if avg_prior_spend > 0 else 0
+                if percent_increase > 0.30:
+                    alerts.append({
+                        'campaign': campaign,
+                        'status': status,
+                        'issue': f"Yesterday spend ({yesterday_spend:,.0f}) is {percent_increase*100:.1f}% higher than 3-day avg ({avg_prior_spend:,.0f})",
+                        'spent_line': f"Yesterday: {yesterday_spend:,.0f} (Avg: {avg_prior_spend:,.0f})",
+                        'metrics': f"Date: {yesterday_str}",
+                        'reason': "High spend anomaly"
+                    })
 
         if status == 'active':
             acc_id_str = str(row['ad_account_id'])
@@ -445,17 +444,18 @@ def analyze_data(campaign_data):
             if full_acc_id in meta_rules:
                 acc_data = meta_rules[full_acc_id]
                 if acc_data.get('error'):
-                    missing_automation_alerts.append({
-                        'campaign': campaign,
-                        'acc_name': acc_name,
-                        'issue': f"Meta Audit Skipped: {acc_data['error']}",
-                        'reason': "Missing Meta Automation"
-                    })
+                    if not is_special_type:
+                        missing_automation_alerts.append({
+                            'campaign': campaign,
+                            'acc_name': acc_name,
+                            'issue': f"Meta Audit Skipped: {acc_data['error']}",
+                            'reason': "Missing Meta Automation"
+                        })
                 else:
                     protected_ids = acc_data.get('protected_ids', set())
                     is_covered = camp_id in protected_ids
                     
-                    if not is_covered:
+                    if not is_covered and not is_special_type:
                          missing_automation_alerts.append({
                             'campaign': campaign,
                             'acc_name': acc_name,
@@ -471,7 +471,7 @@ def analyze_data(campaign_data):
                                 'options': list(enabled_options)
                             })
             else:
-                if not meta_error:
+                if not meta_error and not is_special_type:
                     missing_automation_alerts.append({
                         'campaign': campaign,
                         'status': status,
