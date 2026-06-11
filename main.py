@@ -6,12 +6,12 @@ from email.mime.multipart import MIMEMultipart
 import datetime
 from datetime import timedelta
 import pandas as pd
-import gspread
-from google.oauth2.service_account import Credentials
 from dotenv import load_dotenv
+
 from facebook_business.api import FacebookAdsApi
 from facebook_business.adobjects.adaccount import AdAccount
 from facebook_business.adobjects.campaign import Campaign
+from facebook_business.adobjects.user import User
 from facebook_business.exceptions import FacebookRequestError
 
 # Load environment variables
@@ -23,125 +23,154 @@ SENDER_PASSWORD = os.getenv("EMAIL_SENDER_PASSWORD")
 RECIPIENT_EMAIL = "phuc.tran@digimind.asia"
 CC_EMAIL = "mediagroup@digimind.asia"
 
-# Google Sheets Info
-SHEET_ID = os.getenv("GOOGLE_SHEET_ID")
-TAB_NAME = os.getenv("GOOGLE_SHEET_TAB_NAME")
-
 # Meta API Config
 FB_ACCESS_TOKEN = os.getenv("FB_ACCESS_TOKEN")
 FB_AD_ACCOUNT_ID = os.getenv("FB_AD_ACCOUNT_ID") # Optional fallback
 
-
-def get_sheets_client():
-    """Authenticates and returns a gspread client."""
-    scopes = [
-        "https://www.googleapis.com/auth/spreadsheets.readonly",
-        "https://www.googleapis.com/auth/drive.readonly"
-    ]
-    try:
-        credentials = Credentials.from_service_account_file(
-            "service_account.json", scopes=scopes
-        )
-        client = gspread.authorize(credentials)
-        return client
-    except FileNotFoundError:
-        print("Error: 'service_account.json' not found.")
-        exit(1)
-
-
-def fetch_spreadsheet_data(client):
-    """Fetches data from the Google Sheet and prepares it for analysis."""
-    try:
-        sheet = client.open_by_key(SHEET_ID).worksheet(TAB_NAME)
-    except Exception as e:
-        print(f"Error opening Google Sheet: {e}")
-        exit(1)
-
-    # Fetch all values manually (V8.1: Avoid get_all_records duplicate header error)
-    rows = sheet.get_all_values()
-    if not rows or len(rows) < 2:
-        print("The sheet is empty or lacks data.")
+def fetch_meta_ads_data(access_token):
+    if not access_token:
+        print("Error: Meta Access Token (FB_ACCESS_TOKEN) is not set.")
         return None
-
-    headers = rows[0]
-    data = rows[1:]
-
-    # 1. Standardize and Deduplicate Column Names
-    new_columns = []
-    seen = {}
-    for i, col in enumerate(headers):
-        # Handle empty/blank headers
-        col_str = str(col).strip().lower()
-        if not col_str: col_str = f"unnamed_{i}"
-        
-        if col_str in seen:
-            seen[col_str] += 1
-            new_columns.append(f"{col_str}_{seen[col_str]}")
-        else:
-            seen[col_str] = 0
-            new_columns.append(col_str)
-            
-    # V8.4: Use dtype=str to prevent large IDs from being converted to float (precision loss)
-    df = pd.DataFrame(data, columns=new_columns, dtype=str)
-
-    # 2. Find Best Matching Columns via Keywords (V8.8: Prioritize Exact Matches)
-    def find_col(keywords):
-        # First Pass: Exact Matches
-        for col in df.columns:
-            if col in keywords:
-                return col
-        # Second Pass: Partial Matches (only for longer keywords)
-        for col in df.columns:
-            if any(kw in col for kw in keywords if len(kw) > 2):
-                return col
-        # Last Resort: Minimalist 'id' match
-        if 'id' in keywords:
-            for col in df.columns:
-                if 'id' in col:
-                    return col
-        return None
-
-    date_col = find_col(['date', 'day'])
-    status_col = find_col(['status', 'state'])
-    ad_account_col = find_col(['ad account id', 'account id', 'account_id', 'ad_account_id', 'meta account', 'account_no'])
-    ad_account_name_col = find_col(['ad account name', 'account name', 'account_name'])
-    campaign_id_col = find_col(['campaign id', 'campaign_id', 'cp id', 'meta id', 'id'])
     
-    # Metrics Mapping
-    metric_map = {
-        'spent': find_col(['amount spent', 'spent', 'cost']),
-        'engagement': find_col(['post engagement', 'engagement', 'interaction']),
-        'impressions': find_col(['impressions']),
-        'reach': find_col(['reach']),
-        'video_views': find_col(['3-second video views', 'video views', 'views'])
+    FacebookAdsApi.init(access_token=access_token)
+    me = User(fbid='me')
+    
+    try:
+        my_accounts = me.get_ad_accounts(fields=['id', 'name'], params={'limit': 500})
+    except FacebookRequestError as e:
+        print(f"Error fetching ad accounts: {e}")
+        return None
+
+    target_accounts = []
+    for acc in my_accounts:
+        name = acc.get('name', '')
+        if name.startswith('DIGIMIND_'):
+            target_accounts.append(acc)
+            
+    if not target_accounts:
+        print("No ad accounts found starting with 'DIGIMIND_'.")
+        return None
+
+    all_campaign_data = []
+    
+    today = datetime.datetime.now().date()
+    fourteen_days_ago = today - timedelta(days=14)
+    time_range_kpi = {
+        'since': fourteen_days_ago.strftime('%Y-%m-%d'),
+        'until': today.strftime('%Y-%m-%d')
     }
+
+    four_days_ago = today - timedelta(days=4)
+    time_range_daily = {
+        'since': four_days_ago.strftime('%Y-%m-%d'),
+        'until': today.strftime('%Y-%m-%d')
+    }
+
+    for acc in target_accounts:
+        acc_id = acc['id']
+        acc_name = acc.get('name', 'Unknown')
+        print(f"Fetching data for account: {acc_name} ({acc_id})")
+        account = AdAccount(acc_id)
+        
+        try:
+            campaigns = account.get_campaigns(
+                fields=['name', 'status', 'effective_status', 'spend_cap'],
+                params={'filtering': '[{"field":"effective_status","operator":"IN","value":["ACTIVE","PAUSED"]}]', 'limit': 500}
+            )
+        except Exception as e:
+            print(f"Error fetching campaigns for {acc_name}: {e}")
+            continue
             
-    if not date_col or not metric_map['spent']:
-        print(f"Error: Could not find required columns (Date/Spent). Headers: {df.columns.tolist()}")
-        return None
+        if not campaigns:
+            continue
+            
+        camp_dict = {c['id']: c for c in campaigns}
+        
+        try:
+            insights_14d = account.get_insights(
+                fields=['campaign_id', 'spend', 'reach', 'impressions', 'actions', 'video_p3c_video_views'],
+                params={'level': 'campaign', 'time_range': time_range_kpi, 'limit': 500}
+            )
+        except Exception as e:
+            print(f"Error fetching 14d insights for {acc_name}: {e}")
+            insights_14d = []
 
-    # 3. Aggressive Metric Cleaning
-    for key, col in metric_map.items():
-        if col:
-            df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+        camp_14d_stats = {}
+        for row in insights_14d:
+            c_id = row.get('campaign_id')
+            spend = float(row.get('spend', 0))
+            reach = int(row.get('reach', 0))
+            impressions = int(row.get('impressions', 0))
+            
+            engagement = 0
+            video_views = float(row.get('video_p3c_video_views', 0))
+            actions = row.get('actions', [])
+            for action in actions:
+                a_type = action.get('action_type')
+                val = float(action.get('value', 0))
+                if a_type == 'post_engagement':
+                    engagement += val
+                elif a_type == 'video_view':
+                    video_views += val
+                    
+            camp_14d_stats[c_id] = {
+                'total_spent': spend,
+                'total_reach': reach,
+                'total_impressions': impressions,
+                'total_engagement': engagement,
+                'total_video_views': video_views
+            }
 
-    # 4. Convert Date and Sort
-    df[date_col] = pd.to_datetime(df[date_col], format='mixed', dayfirst=False)
-    df = df.sort_values(by=date_col, ascending=False)
-    
-    # Print mappings for debugging
-    print(f"--- Column Mappings [V6.0] ---")
-    print(f"Date: {date_col}")
-    print(f"Status: {status_col}")
-    print(f"Ad Account ID Map: {ad_account_col}")
-    print(f"Ad Account Name Map: {ad_account_name_col}")
-    print(f"Campaign ID Map: {campaign_id_col}")
-    for k, v in metric_map.items():
-        print(f"{k.capitalize()}: {v}")
-    print(f"-----------------------------")
-    
-    return df, date_col, status_col, metric_map, ad_account_col, ad_account_name_col, campaign_id_col
+        try:
+            insights_daily = account.get_insights(
+                fields=['campaign_id', 'spend'],
+                params={'level': 'campaign', 'time_range': time_range_daily, 'time_increment': 1, 'limit': 1000}
+            )
+        except Exception as e:
+            print(f"Error fetching daily insights for {acc_name}: {e}")
+            insights_daily = []
 
+        camp_daily_spend = {}
+        for row in insights_daily:
+            c_id = row.get('campaign_id')
+            date_start = row.get('date_start')
+            spend = float(row.get('spend', 0))
+            
+            if c_id not in camp_daily_spend:
+                camp_daily_spend[c_id] = {}
+            camp_daily_spend[c_id][date_start] = spend
+
+        for c_id, c in camp_dict.items():
+            name = c.get('name', 'Unknown')
+            if re.search(r'app install|lead|messenger', name, re.IGNORECASE):
+                continue
+                
+            status = c.get('effective_status', c.get('status', 'UNKNOWN')).lower()
+            spend_cap = float(c.get('spend_cap', 0))
+            
+            stats_14d = camp_14d_stats.get(c_id, {})
+            total_spent = stats_14d.get('total_spent', 0)
+            
+            if total_spent < 2000000:
+                continue
+                
+            row = {
+                'ad_account_id': acc_id.replace('act_', ''),
+                'ad_account_name': acc_name,
+                'campaign_id': c_id,
+                'campaign_name': name,
+                'status': status,
+                'spend_cap': spend_cap,
+                'total_spent': total_spent,
+                'total_reach': stats_14d.get('total_reach', 0),
+                'total_impressions': stats_14d.get('total_impressions', 0),
+                'total_engagement': stats_14d.get('total_engagement', 0),
+                'total_video_views': stats_14d.get('total_video_views', 0),
+                'daily_spend': camp_daily_spend.get(c_id, {})
+            }
+            all_campaign_data.append(row)
+            
+    return all_campaign_data
 
 def extract_kpi_target(campaign_name):
     """Extracts numerical target from name (e.g. '3000 CPE' -> 3000, 'CPM_100' -> 100)."""
@@ -328,75 +357,32 @@ def fetch_meta_ad_creatives(access_token, ad_account_ids):
     return enhancements_by_account, error_msg
 
 
-def analyze_data(df, date_col, status_col, metric_map, ad_account_col, ad_account_name_col, campaign_id_col):
-    """Performs mathematical analysis for alerts."""
+
+def analyze_data(campaign_data):
     alerts = []
     
-    # Exclude App Installs, Leads, and Messenger (V7.0)
-    df = df[~df['campaign name'].str.contains('app install|lead|messenger', case=False, na=False)]
+    unique_account_ids = list(set([row['ad_account_id'] for row in campaign_data]))
     
-    campaigns = df['campaign name'].unique()
-    available_dates = df[date_col].drop_duplicates().sort_values(ascending=False).tolist()
-    if not available_dates:
-        return []
-        
-    latest_date = available_dates[0]
-    prior_3_dates = available_dates[1:4]
-    
-    # Primary metrics from mapping
-    spent_col = metric_map['spent']
-    eng_col = metric_map['engagement']
-    imp_col = metric_map['impressions']
-    reach_col = metric_map['reach']
-    views_col = metric_map['video_views']
-
-    # Meta Automation Check (V8.0 - Robust Discovery)
-    raw_acc_ids = df[ad_account_col].dropna().unique() if ad_account_col else []
-    unique_account_ids = []
-    for i in raw_acc_ids:
-        # V8.5: Prefer string cleaning to avoid precision loss on long IDs
-        s = str(i).strip()
-        if s.endswith('.0'): s = s[:-2]
-        
-        if s and s != 'nan' and s != '0' and s not in unique_account_ids:
-            unique_account_ids.append(s)
-
-    if len(unique_account_ids) == 0 and FB_AD_ACCOUNT_ID:
-        unique_account_ids = [FB_AD_ACCOUNT_ID]
-        
-    print(f"DEBUG: Found {len(unique_account_ids)} Ad Accounts in sheet: {unique_account_ids}")
-    meta_rules, meta_error = fetch_meta_automated_rules(FB_ACCESS_TOKEN, [str(i) for i in unique_account_ids])
-    meta_creatives, _ = fetch_meta_ad_creatives(FB_ACCESS_TOKEN, [str(i) for i in unique_account_ids])
+    meta_rules, meta_error = fetch_meta_automated_rules(FB_ACCESS_TOKEN, unique_account_ids)
+    meta_creatives, _ = fetch_meta_ad_creatives(FB_ACCESS_TOKEN, unique_account_ids)
     
     missing_automation_alerts = []
     advantage_alerts = []
     skipped_audit_reason = meta_error
+    
+    today = datetime.datetime.now().date()
+    yesterday_str = (today - timedelta(days=1)).strftime('%Y-%m-%d')
+    prior_3_dates = [(today - timedelta(days=i)).strftime('%Y-%m-%d') for i in range(2, 5)]
 
-    for campaign in campaigns:
-        campaign_df = df[df['campaign name'] == campaign]
-        latest_row = campaign_df.iloc[0]
+    for row in campaign_data:
+        campaign = row['campaign_name']
+        status = row['status']
+        total_spent = row['total_spent']
+        total_engagement = row['total_engagement']
+        total_impressions = row['total_impressions']
+        total_reach = row['total_reach']
+        total_video_views = row['total_video_views']
         
-        # Calculate sums (Metrics are already cleaned to numeric in fetch)
-        total_spent = campaign_df[spent_col].sum() if spent_col else 0
-        
-        # --- NEW V5.2: Threshold Check ---
-        if total_spent < 2000000:
-            continue
-            
-        # Determine status
-        if status_col:
-             status = str(latest_row.get(status_col, 'unknown')).strip()
-        else:
-             status = latest_row.get('campaign status', 'unknown')
-        
-        status = status.lower() if isinstance(status, str) else 'unknown'
-        
-        total_engagement = campaign_df[eng_col].sum() if eng_col else 0
-        total_impressions = campaign_df[imp_col].sum() if imp_col else 0
-        total_reach = campaign_df[reach_col].sum() if reach_col else 0
-        total_video_views = campaign_df[views_col].sum() if views_col else 0
-        
-        # 1. Lifetime Volume KPI Check
         kpi_type, kpi_target = extract_kpi_target(campaign)
         if kpi_type and kpi_target:
             if kpi_type == 'CPE':
@@ -404,8 +390,8 @@ def analyze_data(df, date_col, status_col, metric_map, ad_account_col, ad_accoun
                     alerts.append({
                         'campaign': campaign,
                         'status': status,
-                        'issue': f"Volume Target reached (Target: {kpi_target:,} engagement, Actual: {total_engagement:,.0f})",
-                        'spent_line': f"{total_spent:,.0f} (Lifetime)",
+                        'issue': f"Volume Target reached (Target: {kpi_target:,} engagement, Actual 14d: {total_engagement:,.0f})",
+                        'spent_line': f"{total_spent:,.0f} (14d)",
                         'metrics': f"Total Post Engagement: {total_engagement:,.0f}, Reach: {total_reach:,.0f}, Impressions: {total_impressions:,.0f}",
                         'reason': "Engagement target achieved"
                     })
@@ -414,22 +400,13 @@ def analyze_data(df, date_col, status_col, metric_map, ad_account_col, ad_accoun
                     alerts.append({
                         'campaign': campaign,
                         'status': status,
-                        'issue': f"Volume Target reached (Target: {kpi_target:,.0f} impressions, Actual: {total_impressions:,.0f})",
-                        'spent_line': f"{total_spent:,.0f} (Lifetime)",
+                        'issue': f"Volume Target reached (Target: {kpi_target:,.0f} impressions, Actual 14d: {total_impressions:,.0f})",
+                        'spent_line': f"{total_spent:,.0f} (14d)",
                         'metrics': f"Total Impressions: {total_impressions:,.0f}, Reach: {total_reach:,.0f}",
                         'reason': "Impression target achieved"
                     })
 
-        # 2. Spend Cap Check
-        spend_cap = latest_row.get('campaign spend cap', 0)
-        try:
-            if isinstance(spend_cap, str):
-                spend_cap = float(spend_cap.replace(',', ''))
-            else:
-                spend_cap = float(spend_cap)
-        except (ValueError, TypeError):
-            spend_cap = 0
-
+        spend_cap = row['spend_cap']
         if spend_cap > 0 and total_spent > spend_cap:
              alerts.append({
                 'campaign': campaign,
@@ -440,121 +417,69 @@ def analyze_data(df, date_col, status_col, metric_map, ad_account_col, ad_accoun
                 'reason': "Spending exceeds cap"
             })
 
-        # 3. Spend Anomaly (Yesterday vs Avg 3 Days)
-        yesterday_data = campaign_df[campaign_df[date_col] == latest_date]
-        prior_data = campaign_df[campaign_df[date_col].isin(prior_3_dates)]
+        daily_spends = row['daily_spend']
+        yesterday_spend = daily_spends.get(yesterday_str, 0)
+        prior_spends = [daily_spends.get(d, 0) for d in prior_3_dates]
         
-        if not yesterday_data.empty and not prior_data.empty:
-            yesterday_spend = yesterday_data[spent_col].sum() if spent_col else 0
-            avg_prior_spend = prior_data[spent_col].sum() / len(prior_3_dates) if spent_col else 0
-            
-            if avg_prior_spend >= 1000000: # NEW V5.3: Only alert if 3-day avg spend >= 1M
-                percent_increase = (yesterday_spend - avg_prior_spend) / avg_prior_spend
-                if percent_increase > 0.30: # 30% jump
-                    alerts.append({
-                        'campaign': campaign,
-                        'status': status,
-                        'issue': f"Yesterday spend ({yesterday_spend:,.0f}) is {percent_increase*100:.1f}% higher than 3-day avg ({avg_prior_spend:,.0f})",
-                        'spent_line': f"Yesterday: {yesterday_spend:,.0f} (Avg: {avg_prior_spend:,.0f})",
-                        'metrics': f"Date: {latest_date.strftime('%Y-%m-%d')}",
-                        'reason': "High spend anomaly"
-                    })
-
-        # 3. Meta Automation Rule Audit (V7.2)
-        if status == 'active':
-            # Get account IDs and name from sheet (V8.5 - Strict String Mode)
-            raw_acc_val = latest_row.get(ad_account_col, '') if ad_account_col else ''
-            acc_name = str(latest_row.get(ad_account_name_col, 'Unknown Account')).strip() if ad_account_name_col else 'Unknown Account'
-            
-            acc_id = str(raw_acc_val).strip()
-            if acc_id.endswith('.0'): acc_id = acc_id[:-2]
-                
-            if not acc_id or acc_id == 'nan' or acc_id == '0':
-                acc_id = FB_AD_ACCOUNT_ID
-            
-            camp_id = str(latest_row.get(campaign_id_col, '')).strip() if campaign_id_col else ''
-            # Clean ID (strip .0 if it was converted to float)
-            if camp_id.endswith('.0'):
-                camp_id = camp_id[:-2]
-            
-            acc_id_str = str(acc_id).strip()
-            if not acc_id_str or acc_id_str == 'nan' or acc_id_str == 'None':
-                missing_automation_alerts.append({
+        avg_prior_spend = sum(prior_spends) / len(prior_spends) if prior_spends else 0
+        
+        if avg_prior_spend >= 1000000:
+            percent_increase = (yesterday_spend - avg_prior_spend) / avg_prior_spend if avg_prior_spend > 0 else 0
+            if percent_increase > 0.30:
+                alerts.append({
                     'campaign': campaign,
                     'status': status,
-                    'issue': "Missing Ad Account ID in spreadsheet",
-                    'spent_line': "Cannot check rules without Account ID",
-                    'acc_name': acc_name, # V8.4: Ensure name is available
-                    'metrics': "High Risk",
-                    'reason': "Missing Meta Automation"
+                    'issue': f"Yesterday spend ({yesterday_spend:,.0f}) is {percent_increase*100:.1f}% higher than 3-day avg ({avg_prior_spend:,.0f})",
+                    'spent_line': f"Yesterday: {yesterday_spend:,.0f} (Avg: {avg_prior_spend:,.0f})",
+                    'metrics': f"Date: {yesterday_str}",
+                    'reason': "High spend anomaly"
                 })
-            else:
-                full_acc_id = acc_id_str if acc_id_str.startswith('act_') else f"act_{acc_id_str}"
-                if full_acc_id in meta_rules:
-                    acc_data = meta_rules[full_acc_id]
-                    if acc_data.get('error'):
-                        missing_automation_alerts.append({
+
+        if status == 'active':
+            acc_id_str = str(row['ad_account_id'])
+            acc_name = row['ad_account_name']
+            camp_id = str(row['campaign_id'])
+            
+            full_acc_id = f"act_{acc_id_str}" if not acc_id_str.startswith('act_') else acc_id_str
+            if full_acc_id in meta_rules:
+                acc_data = meta_rules[full_acc_id]
+                if acc_data.get('error'):
+                    missing_automation_alerts.append({
+                        'campaign': campaign,
+                        'acc_name': acc_name,
+                        'issue': f"Meta Audit Skipped: {acc_data['error']}",
+                        'reason': "Missing Meta Automation"
+                    })
+                else:
+                    protected_ids = acc_data.get('protected_ids', set())
+                    is_covered = camp_id in protected_ids
+                    
+                    if not is_covered:
+                         missing_automation_alerts.append({
                             'campaign': campaign,
                             'acc_name': acc_name,
-                            'issue': f"Meta Audit Skipped: {acc_data['error']}",
+                            'issue': "No active 'Pause' rule found for this campaign ID",
                             'reason': "Missing Meta Automation"
                         })
-                    else:
-                        # V7.7 Strict Logic: Use "Plain Text" ID or Auto-Lookup backup
-                        protected_ids = acc_data.get('protected_ids', set())
-                        meta_map = acc_data.get('meta_map', {})
-                        
-                        # ID from Sheet
-                        final_camp_id = str(camp_id).strip() if camp_id and str(camp_id) != '0' else None
-                        if final_camp_id and final_camp_id.endswith('.0'): final_camp_id = final_camp_id[:-2]
-                        
-                        # Fallback to Auto-Lookup if sheet ID is missing
-                        if not final_camp_id and campaign in meta_map:
-                            final_camp_id = meta_map[campaign]
-                        
-                        is_covered = final_camp_id and final_camp_id in protected_ids
-                        
-                        # V8.7 Trace: Keep active for debugging V8.8 results
-                        if not is_covered and final_camp_id and ('Volvo' in campaign or len(final_camp_id) < 10):
-                            print(f"   [TRACE] Campaign: {campaign}")
-                            print(f"   [TRACE] Searching for ID: '{final_camp_id}' (Type: {type(final_camp_id)})")
-                            print(f"   [TRACE] In Account: '{full_acc_id}'")
-                            # print(f"   [TRACE] Account Protected IDs: {list(protected_ids)[:10]}")
-                            if protected_ids:
-                                print(f"   [TRACE] First Protected ID Type: {type(list(protected_ids)[0])}")
-                        
-                        if not is_covered:
-                             msg = "No active 'Pause' rule found for this campaign ID"
-                             if not final_camp_id: msg = "Cannot Audit: ID missing in sheet & lookup failed"
-                             
-                             missing_automation_alerts.append({
+                    
+                    if camp_id and full_acc_id in meta_creatives:
+                        enabled_options = meta_creatives[full_acc_id].get(camp_id)
+                        if enabled_options:
+                            advantage_alerts.append({
                                 'campaign': campaign,
-                                'acc_name': acc_name,
-                                'issue': msg,
-                                'reason': "Missing Meta Automation"
+                                'options': list(enabled_options)
                             })
-                        
-                        # V8.9 Advantage+ Creative Check
-                        if final_camp_id and full_acc_id in meta_creatives:
-                            enabled_options = meta_creatives[full_acc_id].get(final_camp_id)
-                            if enabled_options:
-                                advantage_alerts.append({
-                                    'campaign': campaign,
-                                    'options': list(enabled_options)
-                                })
-                else:
-                    # Not in meta_rules but we had a token? maybe skip reason was missed
-                    if not meta_error:
-                        missing_automation_alerts.append({
-                            'campaign': campaign,
-                            'status': status,
-                            'issue': "Audit skipped (Could not connect to this Ad Account)",
-                            'spent_line': f"Account: {full_acc_id}",
-                            'metrics': "Check your FB_ACCESS_TOKEN permissions",
-                            'reason': "Missing Meta Automation"
-                        })
-
-    # Categorize alerts into Sections (V6.0)
+            else:
+                if not meta_error:
+                    missing_automation_alerts.append({
+                        'campaign': campaign,
+                        'status': status,
+                        'issue': "Audit skipped (Could not connect to this Ad Account)",
+                        'spent_line': f"Account: {full_acc_id}",
+                        'metrics': "Check your FB_ACCESS_TOKEN permissions",
+                        'reason': "Missing Meta Automation"
+                    })
+                    
     kpi_alerts = [a for a in alerts if a['reason'] in ["Engagement target achieved", "Impression target achieved", "Spending exceeds cap"]]
     anomaly_alerts = [a for a in alerts if a['reason'] == "High spend anomaly"]
     
@@ -635,29 +560,31 @@ def send_email(subject, body):
     msg = MIMEMultipart()
     msg['From'] = SENDER_EMAIL
     msg['To'] = RECIPIENT_EMAIL
-    msg['Cc'] = CC_EMAIL
+    # msg['Cc'] = CC_EMAIL
     msg['Subject'] = subject
     msg.attach(MIMEText(body, 'plain'))
     try:
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls()
         server.login(SENDER_EMAIL, SENDER_PASSWORD)
-        recipients = [RECIPIENT_EMAIL, CC_EMAIL]
+        recipients = [RECIPIENT_EMAIL] # CC_EMAIL removed for testing
         server.sendmail(SENDER_EMAIL, recipients, msg.as_string())
         server.quit()
-        print(f"Email sent successfully to {RECIPIENT_EMAIL} and CC'd {CC_EMAIL}")
+        print(f"Email sent successfully to {RECIPIENT_EMAIL}")
     except Exception as e:
         print(f"Error sending email: {e}")
 
 
+
 def main():
-    print(f"Starting Campaign Alert Script (v8.8 - prioritized mapping) at {datetime.datetime.now()}")
-    client = get_sheets_client()
-    result = fetch_spreadsheet_data(client)
-    if result is None: return
+    print(f"Starting Campaign Alert Script (Direct Meta API) at {datetime.datetime.now()}")
     
-    df, date_col, status_col, metric_map, ad_account_col, ad_account_name_col, campaign_id_col = result
-    alert_groups = analyze_data(df, date_col, status_col, metric_map, ad_account_col, ad_account_name_col, campaign_id_col)
+    campaign_data = fetch_meta_ads_data(FB_ACCESS_TOKEN)
+    if not campaign_data:
+        print("No campaign data found or error occurred. Exiting.")
+        return
+        
+    alert_groups = analyze_data(campaign_data)
     
     subject, body = format_email(alert_groups)
     if subject:
