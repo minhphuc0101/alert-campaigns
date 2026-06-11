@@ -44,7 +44,8 @@ def fetch_meta_ads_data(access_token):
     target_accounts = []
     for acc in my_accounts:
         name = acc.get('name', '')
-        if name.startswith('DIGIMIND_'):
+        print(f"DEBUG API Returned Account: '{name}' ({acc.get('id')})")
+        if name.strip().upper().startswith('DIGIMIND_'):
             target_accounts.append(acc)
             
     if not target_accounts:
