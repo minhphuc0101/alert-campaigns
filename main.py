@@ -150,6 +150,9 @@ def fetch_meta_ads_data(access_token):
             
             stats_14d = camp_14d_stats.get(c_id, {})
             total_spent = stats_14d.get('total_spent', 0)
+            
+            if total_spent < 1000000:
+                continue
                 
             row = {
                 'ad_account_id': acc_id.replace('act_', ''),
