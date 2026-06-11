@@ -88,7 +88,7 @@ def fetch_meta_ads_data(access_token):
         
         try:
             insights_14d = account.get_insights(
-                fields=['campaign_id', 'spend', 'reach', 'impressions', 'actions', 'video_p3c_video_views'],
+                fields=['campaign_id', 'spend', 'reach', 'impressions', 'actions'],
                 params={'level': 'campaign', 'time_range': time_range_kpi, 'limit': 500}
             )
         except Exception as e:
@@ -103,7 +103,7 @@ def fetch_meta_ads_data(access_token):
             impressions = int(row.get('impressions', 0))
             
             engagement = 0
-            video_views = float(row.get('video_p3c_video_views', 0))
+            video_views = 0
             actions = row.get('actions', [])
             for action in actions:
                 a_type = action.get('action_type')
