@@ -144,7 +144,6 @@ def send_email(subject, body):
     SENDER_EMAIL = os.getenv("EMAIL_SENDER_ADDRESS")
     SENDER_PASSWORD = os.getenv("EMAIL_SENDER_PASSWORD")
     RECIPIENT_EMAIL = "phuc.tran@digimind.asia"
-    CC_EMAIL = "mediagroup@digimind.asia"
     
     if not SENDER_EMAIL or not SENDER_PASSWORD:
         print("Error: Email credentials missing. Please set EMAIL_SENDER_ADDRESS and EMAIL_SENDER_PASSWORD.")
@@ -153,7 +152,6 @@ def send_email(subject, body):
     msg = MIMEMultipart()
     msg['From'] = SENDER_EMAIL
     msg['To'] = RECIPIENT_EMAIL
-    msg['Cc'] = CC_EMAIL
     msg['Subject'] = subject
     msg.attach(MIMEText(body, 'plain', 'utf-8'))
     
@@ -161,10 +159,9 @@ def send_email(subject, body):
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls()
         server.login(SENDER_EMAIL, SENDER_PASSWORD)
-        recipients = [RECIPIENT_EMAIL, CC_EMAIL]
-        server.sendmail(SENDER_EMAIL, recipients, msg.as_string())
+        server.sendmail(SENDER_EMAIL, RECIPIENT_EMAIL, msg.as_string())
         server.quit()
-        print(f"Email sent successfully to {RECIPIENT_EMAIL} and CC'd {CC_EMAIL}")
+        print(f"Email sent successfully to {RECIPIENT_EMAIL}")
     except Exception as e:
         print(f"Error sending email: {e}")
 
