@@ -80,16 +80,18 @@ def check_all_nested_formulas():
                 
                 # Find headers
                 header_row_idx = -1
+                hang_muc_name = 'Hạng mục'
                 for i, r in enumerate(values):
-                    if 'Hạng mục' in r and 'Cost' in r:
+                    if ('Hạng mục' in r or 'Kênh' in r) and 'Cost' in r:
                         header_row_idx = i
+                        hang_muc_name = 'Hạng mục' if 'Hạng mục' in r else 'Kênh'
                         break
                         
                 if header_row_idx == -1:
                     break # exit retry loop
                     
                 headers = values[header_row_idx]
-                hang_muc_idx = headers.index('Hạng mục')
+                hang_muc_idx = headers.index(hang_muc_name)
                 cost_idx = headers.index('Cost')
                 cost_col_letter = col_num_to_letter(cost_idx)
                 
@@ -115,13 +117,16 @@ def check_all_nested_formulas():
                     hm_lower = hang_muc.lower()
                     if "fb" in hm_lower or "facebook" in hm_lower:
                         if "*1.05" not in cost_form.replace(" ", ""):
-                            alerts.append(f"❌ **{campaign}**: Hạng mục `{hang_muc}` thiếu thuế 5% FB! (Công thức hiện tại: `{cost_form}`)")
+                            alerts.append(f"❌ **{campaign}**: {hang_muc_name} `{hang_muc}` thiếu thuế 5% FB! (Công thức hiện tại: `{cost_form}`)")
+                    elif "tiktok" in hm_lower:
+                        if "*1.05" not in cost_form.replace(" ", ""):
+                            alerts.append(f"❌ **{campaign}**: {hang_muc_name} `{hang_muc}` thiếu thuế 5% TikTok! (Công thức hiện tại: `{cost_form}`)")
                     elif "adx" in hm_lower or "zalo" in hm_lower:
                         if "/1.08" not in cost_form.replace(" ", ""):
-                            alerts.append(f"❌ **{campaign}**: Hạng mục `{hang_muc}` thiếu trừ VAT 8% ADX/Zalo! (Công thức hiện tại: `{cost_form}`)")
+                            alerts.append(f"❌ **{campaign}**: {hang_muc_name} `{hang_muc}` thiếu trừ VAT 8% ADX/Zalo! (Công thức hiện tại: `{cost_form}`)")
                     elif "gg" in hm_lower or "google" in hm_lower:
                         if "1.05" in cost_form or "1.08" in cost_form:
-                            alerts.append(f"❌ **{campaign}**: Hạng mục `{hang_muc}` (GG) không được tính thuế, nhưng công thức có vẻ sai! (Công thức hiện tại: `{cost_form}`)")
+                            alerts.append(f"❌ **{campaign}**: {hang_muc_name} `{hang_muc}` (GG) không được tính thuế, nhưng công thức có vẻ sai! (Công thức hiện tại: `{cost_form}`)")
                 
                 # Success, break retry loop
                 break
