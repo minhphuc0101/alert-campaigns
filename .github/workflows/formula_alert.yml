@@ -23,9 +23,13 @@ jobs:
           python -m pip install --upgrade pip
           pip install gspread oauth2client python-dotenv pandas
           
+      - name: Create Google Service Account JSON
+        run: |
+          echo '${{ secrets.GCP_SERVICE_ACCOUNT_JSON }}' > service_account.json
+
       - name: Run Formula Check and Send Email
         env:
-          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+          GOOGLE_CREDS_PATH: service_account.json
           EMAIL_SENDER_ADDRESS: ${{ secrets.EMAIL_SENDER_ADDRESS }}
           EMAIL_SENDER_PASSWORD: ${{ secrets.EMAIL_SENDER_PASSWORD }}
         run: python formula_alert.py
