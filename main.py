@@ -337,12 +337,19 @@ def fetch_meta_ad_creatives(access_token, ad_account_ids):
                     features = dof.get('creative_features_spec', {})
                     
                     active_options = []
-                    if features.get('standard_enhancements', {}).get('enroll_status') == 'OPT_IN':
-                        active_options.append('Standard Enhancements')
-                    if features.get('multi_advertiser_ad_display', {}).get('enroll_status') == 'OPT_IN':
-                        active_options.append('Multi-advertiser Ads')
-                    if features.get('text_optimizations', {}).get('enroll_status') == 'OPT_IN':
-                        active_options.append('Text Optimizations')
+                    for feature_name, feature_data in features.items():
+                        if isinstance(feature_data, dict) and feature_data.get('enroll_status') == 'OPT_IN':
+                            readable_name = feature_name.replace('_', ' ').title()
+                            # If standard enhancements has nested details, let's try to extract them
+                            details = []
+                            for k, v in feature_data.items():
+                                if k != 'enroll_status' and isinstance(v, dict) and v.get('enroll_status') == 'OPT_IN':
+                                    details.append(k.replace('_', ' ').title())
+                            
+                            if details:
+                                readable_name += f" ({', '.join(details)})"
+                                
+                            active_options.append(readable_name)
                     
                     if active_options and camp_id:
                         if camp_id not in campaign_enhancements:
@@ -389,21 +396,21 @@ def analyze_data(campaign_data):
             kpi_type, kpi_target = extract_kpi_target(campaign)
             if kpi_type and kpi_target:
                 if kpi_type == 'CPE':
-                    if total_engagement > kpi_target:
+                    if total_engagement > kpi_target * 1.05:
                         alerts.append({
                             'campaign': campaign,
                             'status': status,
-                            'issue': f"Volume Target reached (Target: {kpi_target:,} engagement, Actual 14d: {total_engagement:,.0f})",
+                            'issue': f"Volume Target exceeded by >5% (Target: {kpi_target:,} engagement, Actual 14d: {total_engagement:,.0f})",
                             'spent_line': f"{total_spent:,.0f} (14d)",
                             'metrics': f"Total Post Engagement: {total_engagement:,.0f}, Reach: {total_reach:,.0f}, Impressions: {total_impressions:,.0f}",
                             'reason': "Engagement target achieved"
                         })
                 elif kpi_type == 'CPM':
-                    if total_impressions > kpi_target:
+                    if total_impressions > kpi_target * 1.05:
                         alerts.append({
                             'campaign': campaign,
                             'status': status,
-                            'issue': f"Volume Target reached (Target: {kpi_target:,.0f} impressions, Actual 14d: {total_impressions:,.0f})",
+                            'issue': f"Volume Target exceeded by >5% (Target: {kpi_target:,.0f} impressions, Actual 14d: {total_impressions:,.0f})",
                             'spent_line': f"{total_spent:,.0f} (14d)",
                             'metrics': f"Total Impressions: {total_impressions:,.0f}, Reach: {total_reach:,.0f}",
                             'reason': "Impression target achieved"
