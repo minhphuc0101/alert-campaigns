@@ -343,7 +343,11 @@ def fetch_meta_ad_creatives(access_token, ad_account_ids):
                             # If standard enhancements has nested details, let's try to extract them
                             details = []
                             for k, v in feature_data.items():
-                                if k != 'enroll_status' and isinstance(v, dict) and v.get('enroll_status') == 'OPT_IN':
+                                if k == 'sub_enhancements' and isinstance(v, dict):
+                                    for sub_k, sub_v in v.items():
+                                        if isinstance(sub_v, dict) and sub_v.get('enroll_status') == 'OPT_IN':
+                                            details.append(sub_k.replace('_', ' ').title())
+                                elif k != 'enroll_status' and isinstance(v, dict) and v.get('enroll_status') == 'OPT_IN':
                                     details.append(k.replace('_', ' ').title())
                             
                             if details:
@@ -446,9 +450,11 @@ def analyze_data(campaign_data):
                     })
 
         if status == 'active':
-            acc_id_str = str(row['ad_account_id'])
+            acc_id_str = str(row['ad_account_id']).strip()
+            if acc_id_str.endswith('.0'): acc_id_str = acc_id_str[:-2]
             acc_name = row['ad_account_name']
-            camp_id = str(row['campaign_id'])
+            camp_id = str(row['campaign_id']).strip()
+            if camp_id.endswith('.0'): camp_id = camp_id[:-2]
             
             full_acc_id = f"act_{acc_id_str}" if not acc_id_str.startswith('act_') else acc_id_str
             if full_acc_id in meta_rules:
