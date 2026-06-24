@@ -343,11 +343,15 @@ def fetch_meta_ad_creatives(access_token, ad_account_ids):
                             # If standard enhancements has nested details, let's try to extract them
                             details = []
                             for k, v in feature_data.items():
-                                if k == 'sub_enhancements' and isinstance(v, dict):
+                                if k == 'enroll_status':
+                                    continue
+                                if isinstance(v, dict) and v.get('enroll_status') == 'OPT_IN':
+                                    details.append(k.replace('_', ' ').title())
+                                elif k == 'sub_enhancements' and isinstance(v, dict):
                                     for sub_k, sub_v in v.items():
                                         if isinstance(sub_v, dict) and sub_v.get('enroll_status') == 'OPT_IN':
                                             details.append(sub_k.replace('_', ' ').title())
-                                elif k != 'enroll_status' and isinstance(v, dict) and v.get('enroll_status') == 'OPT_IN':
+                                elif v == 'OPT_IN' or v is True:
                                     details.append(k.replace('_', ' ').title())
                             
                             if details:
