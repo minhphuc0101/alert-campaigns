@@ -1,6 +1,7 @@
 import os
 import smtplib
 import re
+import json
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import datetime
@@ -325,45 +326,87 @@ def fetch_meta_ad_creatives(access_token, ad_account_ids):
             try:
                 account = AdAccount(full_id)
                 ads = account.get_ads(
-                    fields=['campaign_id', 'creative{degrees_of_freedom_spec}'],
+                    fields=['campaign_id', 'creative{id,degrees_of_freedom_spec}'],
                     params={'filtering': '[{"field":"effective_status","operator":"IN","value":["ACTIVE"]}]'}
                 )
                 
                 campaign_enhancements = {}
                 for ad in ads:
-                    camp_id = ad.get('campaign_id')
-                    creative = ad.get('creative', {})
-                    dof = creative.get('degrees_of_freedom_spec', {})
-                    features = dof.get('creative_features_spec', {})
-                    
-                    active_options = []
-                    for feature_name, feature_data in features.items():
-                        if isinstance(feature_data, dict) and feature_data.get('enroll_status') == 'OPT_IN':
-                            readable_name = feature_name.replace('_', ' ').title()
-                            # If standard enhancements has nested details, let's try to extract them
-                            details = []
-                            for k, v in feature_data.items():
-                                if k == 'enroll_status':
-                                    continue
-                                if isinstance(v, dict) and v.get('enroll_status') == 'OPT_IN':
-                                    details.append(k.replace('_', ' ').title())
-                                elif k == 'sub_enhancements' and isinstance(v, dict):
-                                    for sub_k, sub_v in v.items():
-                                        if isinstance(sub_v, dict) and sub_v.get('enroll_status') == 'OPT_IN':
-                                            details.append(sub_k.replace('_', ' ').title())
-                                elif v == 'OPT_IN' or v is True:
-                                    details.append(k.replace('_', ' ').title())
+                    try:
+                        camp_id = ad.get('campaign_id')
+                        if not camp_id:
+                            continue
                             
-                            if details:
-                                readable_name += f" ({', '.join(details)})"
+                        creative = ad.get('creative')
+                        if not creative:
+                            continue
+                            
+                        dof = creative.get('degrees_of_freedom_spec')
+                        if not dof:
+                            continue
+                            
+                        if isinstance(dof, str):
+                            try:
+                                dof = json.loads(dof)
+                            except:
+                                continue
                                 
-                            active_options.append(readable_name)
-                    
-                    if active_options and camp_id:
-                        if camp_id not in campaign_enhancements:
-                            campaign_enhancements[camp_id] = set()
-                        for opt in active_options:
-                            campaign_enhancements[camp_id].add(opt)
+                        if not isinstance(dof, dict):
+                            continue
+                            
+                        features = dof.get('creative_features_spec', {})
+                        if isinstance(features, str):
+                            try:
+                                features = json.loads(features)
+                            except:
+                                features = {}
+                        if not isinstance(features, dict):
+                            continue
+                            
+                        active_options = []
+                        for feature_name, feature_data in features.items():
+                            if not isinstance(feature_data, dict):
+                                if feature_data == 'OPT_IN' or feature_data is True:
+                                    active_options.append(feature_name.replace('_', ' ').title())
+                                continue
+                                
+                            enroll_status = feature_data.get('enroll_status')
+                            if enroll_status == 'OPT_IN':
+                                readable_name = feature_name.replace('_', ' ').title()
+                                details = []
+                                for k, v in feature_data.items():
+                                    if k == 'enroll_status':
+                                        continue
+                                    if isinstance(v, dict) and v.get('enroll_status') == 'OPT_IN':
+                                        details.append(k.replace('_', ' ').title())
+                                    elif k == 'sub_enhancements' and isinstance(v, dict):
+                                        for sub_k, sub_v in v.items():
+                                            if isinstance(sub_v, dict) and sub_v.get('enroll_status') == 'OPT_IN':
+                                                details.append(sub_k.replace('_', ' ').title())
+                                    elif v == 'OPT_IN' or v is True:
+                                        details.append(k.replace('_', ' ').title())
+                                        
+                                if details:
+                                    readable_name += f" ({', '.join(details)})"
+                                active_options.append(readable_name)
+                            elif enroll_status is None:
+                                sub_details = []
+                                for k, v in feature_data.items():
+                                    if isinstance(v, dict) and v.get('enroll_status') == 'OPT_IN':
+                                        sub_details.append(k.replace('_', ' ').title())
+                                    elif v == 'OPT_IN' or v is True:
+                                        sub_details.append(k.replace('_', ' ').title())
+                                if sub_details:
+                                    readable_name = feature_name.replace('_', ' ').title() + f" ({', '.join(sub_details)})"
+                                    active_options.append(readable_name)
+                                    
+                        if active_options:
+                            if camp_id not in campaign_enhancements:
+                                campaign_enhancements[camp_id] = set()
+                            for opt in active_options:
+                                campaign_enhancements[camp_id].add(opt)
+                    except Exception as ad_err:
+                        print(f"Error parsing ad creative: {ad_err}")
                             
                 enhancements_by_account[full_id] = campaign_enhancements
             except Exception as e:
