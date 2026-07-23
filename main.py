@@ -338,10 +338,19 @@ def fetch_meta_ad_creatives(access_token, ad_account_ids):
                             continue
                             
                         creative = ad.get('creative')
-                        if not creative:
-                            continue
-                            
-                        dof = creative.get('degrees_of_freedom_spec')
+                        dof = None
+                        if creative:
+                            try:
+                                dof = creative.get('degrees_of_freedom_spec')
+                            except AttributeError:
+                                pass
+                        
+                        if not dof:
+                            try:
+                                dof = ad.get('degrees_of_freedom_spec')
+                            except AttributeError:
+                                pass
+                                
                         if not dof:
                             continue
                             
