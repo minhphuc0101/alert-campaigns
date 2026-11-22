@@ -1,9 +1,6 @@
 name: Weekly Formula Audit
 
 on:
-  schedule:
-    # Run every Tuesday at 02:00 UTC (09:00 AM Vietnam Time)
-    - cron: '0 2 * * 2'
   workflow_dispatch: # Allows manual trigger
 
 jobs:
